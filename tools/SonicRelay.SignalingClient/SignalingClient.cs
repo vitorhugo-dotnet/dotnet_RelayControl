@@ -147,7 +147,15 @@ public sealed class SignalingClient(Uri baseUrl, TextWriter output)
         var payloadElement = JsonSerializer.SerializeToElement(payload, JsonOptions);
         var message = SignalingMessage.Create(type, receiverParticipantId, payloadElement);
         await SendAsync(senderSocket, message, cancellationToken);
-        var routed = await ReceiveAsync(receiverSocket, cancellationToken);
+        // The server also pushes announcements about other participants (session.joined,
+        // participant.capabilities for the peers already connected, and so on) onto the same
+        // socket. They are not what this step is validating and their exact set grows as the
+        // protocol does, so skip anything that is not the routed message we just sent.
+        JsonElement routed;
+        do
+        {
+            routed = await ReceiveAsync(receiverSocket, cancellationToken);
+        } while (routed.GetProperty("type").GetString() != type);
         SignalingMessage.ValidateRouted(routed, type, message.MessageId, sessionId,
             senderParticipantId, receiverParticipantId);
         if (!JsonElement.DeepEquals(message.Payload, routed.GetProperty("payload")))

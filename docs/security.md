@@ -32,6 +32,7 @@ The only authentication scheme is `DeviceBearer`:
 - Join requires a `session:join`-scoped token, an active `DevicePairing` to the session's source device, and enforces the session viewer limit; the joining device is always the caller's own, never a client-supplied one.
 - WebSocket upgrade requires a `signaling:connect`-scoped token and a matching session participant record for the caller's device.
 - Signaling routing always uses the authenticated participant as `from` and restricts recipients to the same session.
+- Publishing audio requires the backend flag `audioSendAllowed` on the participant row. It is seeded from the session mode and role on join, and afterwards only the session's source device can change it, through `POST /api/sessions/{id}/participants/{participantId}/audio-permission` (a `session:end`-scoped, duplex-only route). A client declaring `canSendAudio: true` without it is refused with `audio_send_not_authorized`, and the permission is re-read from the database on every such message, so a revocation applies to a socket that is already open.
 
 A new viewer participant needs both an active `DevicePairing` to the session's
 source device and the current session join code. The API deliberately returns
@@ -41,6 +42,8 @@ Existing participants may reconnect after pairing revocation until the
 session ends; revocation only blocks new joins.
 
 The named policies `session:create`, `session:join`, `session:end`, `signaling:connect`, `turn:credentials`, `device:read`, `device:manage`, `pairing:create`, `pairing:complete` and `pairing:revoke` each require a `DeviceBearer` token carrying the matching scope; `DeviceScopeAuthorizationHandler` also re-checks the device's live status and credential version against the database on every request, so revocation and credential rotation take effect immediately. `DeviceAuthenticated` is a scope-less variant of the same check, used by read-only routes that need no capability beyond an active device.
+
+Because the API never parses SDP ([ADR 0001](adr/0001-control-plane-only.md)), "only authorized participants publish audio" is enforced at the signaling layer, not in the media: the server decides and broadcasts who may publish, and clients must reject inbound audio from a peer whose latest server-sent `audioSendAllowed` is false. Peers must not trust each other's self-reported capabilities.
 
 ### Session codes
 

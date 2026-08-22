@@ -24,6 +24,12 @@ public static class SessionEndpoints
         group.MapPost("/{sessionId:guid}/rotate-code", RotateCodeAsync).RequireAuthorization("session:end").RequireRateLimiting("rotate-code");
         group.MapPost("/join", JoinAsync).RequireAuthorization("session:join").RequireRateLimiting("join-session");
         group.MapPost("/{sessionId:guid}/join", JoinByIdAsync).RequireAuthorization("session:join").RequireRateLimiting("join-session");
+        group.MapGet("/{sessionId:guid}/participants", GetParticipantsAsync).RequireAuthorization("DeviceAuthenticated");
+        // Owner-only, like end and rotate-code: "session:end" is the scope the API already
+        // grants exclusively to the device that publishes a session, so it doubles as the
+        // session-owner management scope rather than minting a near-duplicate one.
+        group.MapPost("/{sessionId:guid}/participants/{participantId:guid}/audio-permission", SetAudioPermissionAsync)
+            .RequireAuthorization("session:end");
         return app;
     }
 
@@ -35,6 +41,13 @@ public static class SessionEndpoints
         if (device is null) return Results.Unauthorized();
         var maxViewers = request.MaxViewers ?? configuration.GetValue("Sessions:MaxViewersPerSession", 3);
         if (maxViewers < 1) return Results.BadRequest(new { error = "MaxViewers must be at least one." });
+        var mode = SessionModes.Normalize(request.Mode);
+        if (mode is null)
+            return Results.BadRequest(new
+            {
+                error = $"Mode must be '{SessionModes.Broadcast}' or '{SessionModes.Duplex}'.",
+                code = "invalid_session_mode"
+            });
 
         var now = DateTimeOffset.UtcNow;
         var ttl = CodeTtl(configuration);
@@ -42,12 +55,13 @@ public static class SessionEndpoints
         {
             Id = Guid.NewGuid(),
             SourceDeviceId = device.Id,
+            Mode = mode,
             MaxViewers = maxViewers,
             CodeExpiresAt = now.Add(ttl),
             CreatedAt = now
         };
         db.StreamSessions.Add(session);
-        db.SessionParticipants.Add(new SessionParticipant
+        var publisher = new SessionParticipant
         {
             Id = Guid.NewGuid(),
             SessionId = session.Id,
@@ -55,7 +69,9 @@ public static class SessionEndpoints
             Role = ParticipantRoles.Publisher,
             Status = ParticipantStatuses.Connected,
             JoinedAt = now
-        });
+        };
+        SessionAudioPolicy.ApplyDefaults(publisher, session.Mode);
+        db.SessionParticipants.Add(publisher);
         await db.SaveChangesAsync(ct);
 
         var code = GenerateCode();
@@ -78,6 +94,7 @@ public static class SessionEndpoints
                 x.Id,
                 x.SourceDeviceId,
                 x.Status,
+                x.Mode,
                 x.MaxViewers,
                 x.CodeExpiresAt,
                 x.StartedAt,
@@ -112,6 +129,7 @@ public static class SessionEndpoints
                 PublisherDeviceName = db.DeviceIdentities
                     .Where(d => d.Id == x.SourceDeviceId).Select(d => d.Name).FirstOrDefault(),
                 x.Status,
+                x.Mode,
                 x.MaxViewers,
                 x.CreatedAt,
                 ViewerCount = db.SessionParticipants.Count(p => p.SessionId == x.Id
@@ -304,6 +322,10 @@ public static class SessionEndpoints
             Status = ParticipantStatuses.Connected,
             JoinedAt = now
         };
+        // In a duplex session a joining participant is a peer, not an audience member: the
+        // "viewer" role stays as the routing/capacity concept it has always been, and the
+        // session mode is what decides whether the participant may publish audio.
+        SessionAudioPolicy.ApplyDefaults(participant, session.Mode);
         db.SessionParticipants.Add(participant);
         if (session.Status == SessionStatuses.Waiting)
         {
@@ -327,6 +349,94 @@ public static class SessionEndpoints
             "Reconnected participant {ParticipantId} to session {SessionId} from device {DeviceId}",
             participant.Id, session.Id, device.Id);
         return Results.Ok(ToResponse(session));
+    }
+
+    /// <summary>
+    /// Presence and audio capabilities of everyone in a session, for any device that takes part
+    /// in it. Duplex clients need this to know which peers may publish audio before any SDP is
+    /// exchanged; broadcast clients get the same view of the publisher. Device ids are
+    /// deliberately not projected — participant ids are what signaling addresses, and a device
+    /// id is a durable identifier that peers have no reason to learn from each other.
+    /// </summary>
+    private static async Task<IResult> GetParticipantsAsync(Guid sessionId, ClaimsPrincipal principal,
+        AppDbContext db, CancellationToken ct)
+    {
+        var device = await DeviceIdentityEndpoints.RequireDeviceAsync(principal, db, ct);
+        if (device is null) return Results.Unauthorized();
+        var session = await db.StreamSessions.AsNoTracking().SingleOrDefaultAsync(x => x.Id == sessionId, ct);
+        if (session is null) return Results.NotFound();
+        var canAccess = session.SourceDeviceId == device.Id
+            || await db.SessionParticipants.AnyAsync(x => x.SessionId == sessionId && x.DeviceId == device.Id, ct);
+        if (!canAccess) return Results.NotFound();
+
+        var participants = await db.SessionParticipants.AsNoTracking()
+            .Where(x => x.SessionId == sessionId)
+            .OrderBy(x => x.JoinedAt)
+            .Select(x => new
+            {
+                ParticipantId = x.Id,
+                x.Role,
+                x.Status,
+                x.AudioSendAllowed,
+                x.CanSendAudio,
+                x.CanReceiveAudio,
+                x.AudioMuted,
+                x.JoinedAt,
+                x.LeftAt,
+                IsSelf = x.DeviceId == device.Id
+            })
+            .ToListAsync(ct);
+
+        return Results.Ok(new { sessionId, mode = session.Mode, participants });
+    }
+
+    /// <summary>
+    /// Grants or revokes one participant's permission to publish audio. Only the session's own
+    /// device may call it, and only on a duplex session: a broadcast session is one-way by
+    /// definition, so silently promoting a viewer there would make the mode meaningless.
+    /// Revoking also clears the participant's declared <c>canSendAudio</c> and tells every
+    /// connected peer, so they stop expecting audio from it instead of waiting for the offender
+    /// to volunteer the change.
+    /// </summary>
+    private static async Task<IResult> SetAudioPermissionAsync(Guid sessionId, Guid participantId,
+        AudioPermissionRequest request, ClaimsPrincipal principal, AppDbContext db, IConnectionRegistry registry,
+        ILoggerFactory loggerFactory, CancellationToken ct)
+    {
+        var device = await DeviceIdentityEndpoints.RequireDeviceAsync(principal, db, ct);
+        if (device is null) return Results.Unauthorized();
+        var session = await db.StreamSessions
+            .SingleOrDefaultAsync(x => x.Id == sessionId && x.SourceDeviceId == device.Id, ct);
+        if (session is null) return Results.NotFound();
+        if (session.Status is SessionStatuses.Ended or SessionStatuses.Expired)
+            return Results.Conflict(new { error = "Session is no longer live.", code = "session_terminal" });
+        if (session.Mode != SessionModes.Duplex)
+            return Results.Conflict(new
+            {
+                error = "Audio publish permission can only be changed on a duplex session.",
+                code = "session_not_duplex"
+            });
+
+        var participant = await db.SessionParticipants
+            .SingleOrDefaultAsync(x => x.Id == participantId && x.SessionId == sessionId, ct);
+        if (participant is null) return Results.NotFound();
+
+        participant.AudioSendAllowed = request.CanSendAudio;
+        if (!request.CanSendAudio) participant.CanSendAudio = false;
+        await db.SaveChangesAsync(ct);
+
+        await SignalingWebSocketEndpoint.BroadcastCapabilitiesAsync(registry, session, participant, ct);
+        loggerFactory.CreateLogger("SonicRelay.Sessions").LogInformation(
+            "Set audio publish permission to {AudioSendAllowed} for participant {ParticipantId} in session {SessionId}",
+            request.CanSendAudio, participantId, sessionId);
+        return Results.Ok(new
+        {
+            participantId = participant.Id,
+            participant.Role,
+            participant.AudioSendAllowed,
+            participant.CanSendAudio,
+            participant.CanReceiveAudio,
+            participant.AudioMuted
+        });
     }
 
     /// <summary>
@@ -378,6 +488,7 @@ public static class SessionEndpoints
         session.Id,
         session.SourceDeviceId,
         session.Status,
+        session.Mode,
         session.MaxViewers,
         session.CodeExpiresAt,
         session.StartedAt,
@@ -409,6 +520,7 @@ public static class SessionEndpoints
     // SourceDeviceId/DeviceId are no longer client-supplied: the caller's own device identity
     // (from the DeviceBearer token) is always the publisher of a created session and always the
     // viewer that joins, so there is nothing left for the client to assert about which device it is.
-    private sealed record CreateSessionRequest(int? MaxViewers);
+    private sealed record CreateSessionRequest(int? MaxViewers, string? Mode);
+    private sealed record AudioPermissionRequest(bool CanSendAudio);
     private sealed record JoinSessionRequest(string Code);
 }

@@ -25,6 +25,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.ToTable("stream_sessions");
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Status).HasMaxLength(32).IsRequired();
+            // Sessions created before duplex existed are one-way, and so is anything a client
+            // creates without asking for a mode; the column default keeps both cases honest
+            // without a backfill that has to guess.
+            entity.Property(x => x.Mode).HasMaxLength(16).IsRequired().HasDefaultValue(SessionModes.Broadcast);
             entity.HasIndex(x => new { x.SourceDeviceId, x.Status }).HasDatabaseName("ix_stream_sessions_source_device_status");
             // The data-retention sweep (issue #44) scans by collection time, not by status.
             entity.HasIndex(x => x.CreatedAt).HasDatabaseName("ix_stream_sessions_created_at");
@@ -36,6 +40,12 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Role).HasMaxLength(32).IsRequired();
             entity.Property(x => x.Status).HasMaxLength(32).IsRequired();
+            // Audio capabilities default to the broadcast shape (publishers transmit, viewers
+            // listen); the migration backfills existing rows by role for the same reason.
+            entity.Property(x => x.AudioSendAllowed).HasDefaultValue(false);
+            entity.Property(x => x.CanSendAudio).HasDefaultValue(false);
+            entity.Property(x => x.CanReceiveAudio).HasDefaultValue(true);
+            entity.Property(x => x.AudioMuted).HasDefaultValue(false);
             entity.HasIndex(x => new { x.SessionId, x.Role }).HasDatabaseName("ix_session_participants_session_role");
             // A device holds at most one participant row per role in a session. Rejoin after a
             // network loss is a read-then-insert, and without this two concurrent attempts from

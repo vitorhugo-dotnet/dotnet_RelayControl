@@ -15,7 +15,20 @@ public static class SignalingWebSocketEndpoint
     private static readonly HashSet<string> RoutedMessageTypes =
     [
         "publisher.ready", "viewer.ready", "webrtc.offer", "webrtc.answer",
-        "webrtc.ice_candidate", "pong"
+        "webrtc.ice_candidate", "webrtc.renegotiate", "pong"
+    ];
+
+    /// <summary>
+    /// Client messages that describe the sender's own state rather than addressing one peer.
+    /// They carry no "to": the server validates them, persists the resulting state and
+    /// broadcasts the authoritative version to the whole session, so every peer sees the same
+    /// capability and mute state without the sender having to fan it out itself.
+    /// </summary>
+    private const string CapabilitiesMessageType = "participant.capabilities";
+    private const string AudioStateMessageType = "participant.audio_state_changed";
+    private static readonly HashSet<string> SessionScopedMessageTypes =
+    [
+        CapabilitiesMessageType, AudioStateMessageType
     ];
 
     public static IEndpointRouteBuilder MapSignalingWebSocketEndpoint(this IEndpointRouteBuilder app)
@@ -116,12 +129,17 @@ public static class SignalingWebSocketEndpoint
 
         try
         {
+            // The join payload carries the participant's audio capabilities alongside the
+            // long-standing participantId/role pair, so a client knows whether it may publish
+            // audio (and what its peers may do) before any SDP is exchanged. Clients written
+            // before duplex existed simply ignore the extra fields.
             await SendEnvelopeAsync(SendFrameAsync, "session.joined", sessionId, null, participant.Id,
-                new { participantId = participant.Id, role = participant.Role }, context.RequestAborted);
+                CapabilitiesPayload(participant, session.Mode), context.RequestAborted);
             var peerAnnouncementType = isGracePeriodReconnect ? "participant.reconnected" : "session.joined";
             await BroadcastAsync(registry, sessionId, participant.Id, peerAnnouncementType, participant.Id,
-                new { participantId = participant.Id, role = participant.Role }, context.RequestAborted);
-            await ReceiveLoopAsync(socket, SendFrameAsync, sessionId, participant.Id, db, registry, logger, metrics,
+                CapabilitiesPayload(participant, session.Mode), context.RequestAborted);
+            await SendPeerRosterAsync(SendFrameAsync, db, registry, session, participant.Id, context.RequestAborted);
+            await ReceiveLoopAsync(socket, SendFrameAsync, session, participant.Id, db, registry, logger, metrics,
                 context.RequestAborted);
         }
         finally
@@ -195,10 +213,11 @@ public static class SignalingWebSocketEndpoint
     }
 
     private static async Task ReceiveLoopAsync(WebSocket socket,
-        Func<ReadOnlyMemory<byte>, CancellationToken, Task> sendAsync, Guid sessionId, Guid participantId,
+        Func<ReadOnlyMemory<byte>, CancellationToken, Task> sendAsync, StreamSession session, Guid participantId,
         AppDbContext db, IConnectionRegistry registry, ILogger logger, Observability.SonicRelayMetrics metrics,
         CancellationToken ct)
     {
+        var sessionId = session.Id;
         while (socket.State == WebSocketState.Open && !ct.IsCancellationRequested)
         {
             using var receiveCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -217,15 +236,16 @@ public static class SignalingWebSocketEndpoint
 
             var message = await receiveTask;
             if (message is null) return;
-            if (!await HandleMessageAsync(sendAsync, sessionId, participantId, message, db, registry, logger, metrics, ct))
+            if (!await HandleMessageAsync(sendAsync, session, participantId, message, db, registry, logger, metrics, ct))
                 return;
         }
     }
 
     private static async Task<bool> HandleMessageAsync(Func<ReadOnlyMemory<byte>, CancellationToken, Task> sendAsync,
-        Guid sessionId, Guid participantId, byte[] message, AppDbContext db, IConnectionRegistry registry, ILogger logger,
+        StreamSession session, Guid participantId, byte[] message, AppDbContext db, IConnectionRegistry registry, ILogger logger,
         Observability.SonicRelayMetrics metrics, CancellationToken ct)
     {
+        var sessionId = session.Id;
         JsonDocument document;
         try
         {
@@ -253,14 +273,32 @@ public static class SignalingWebSocketEndpoint
                 await SendEnvelopeAsync(sendAsync, "pong", sessionId, null, participantId, null, ct);
                 return true;
             }
-            if (!RoutedMessageTypes.Contains(type))
+            if (!RoutedMessageTypes.Contains(type) && !SessionScopedMessageTypes.Contains(type))
             {
                 await SendErrorAsync(metrics, sendAsync, sessionId, participantId, "unsupported_message_type", ct);
                 return true;
             }
-            // `type` is now guaranteed to be one of the bounded RoutedMessageTypes, so it is
+            // `type` is now guaranteed to be one of the bounded message-type sets, so it is
             // safe to use as a metric label without risking cardinality blow-up.
             metrics.RecordMessage(type);
+
+            if (SessionScopedMessageTypes.Contains(type))
+            {
+                var declaredPayload = root.TryGetProperty("payload", out var stateElement)
+                    ? stateElement
+                    : (JsonElement?)null;
+                if (await SessionEndedAsync(db, sessionId, ct))
+                {
+                    logger.LogInformation("Closing signaling for terminal session {SessionId} and participant {ParticipantId}",
+                        sessionId, participantId);
+                    await SendEnvelopeAsync(sendAsync, "session.ended", sessionId, null, participantId, null, ct);
+                    return false;
+                }
+                await HandleParticipantStateAsync(sendAsync, session, participantId, type, declaredPayload, db,
+                    registry, logger, metrics, ct);
+                return true;
+            }
+
             if (!root.TryGetProperty("to", out var toElement) || !toElement.TryGetGuid(out var toParticipantId))
             {
                 await SendErrorAsync(metrics, sendAsync, sessionId, participantId, "invalid_recipient", ct);
@@ -299,6 +337,139 @@ public static class SignalingWebSocketEndpoint
             return true;
         }
     }
+
+    /// <summary>
+    /// Applies a participant's own capability or mute announcement and republishes the result to
+    /// the whole session, sender included. The server is the authority here: a participant that
+    /// the backend has not authorized to publish audio cannot talk its way into
+    /// <c>canSendAudio: true</c>, and every peer learns the same state from the server rather
+    /// than from each other.
+    /// </summary>
+    private static async Task HandleParticipantStateAsync(
+        Func<ReadOnlyMemory<byte>, CancellationToken, Task> sendAsync, StreamSession session, Guid participantId,
+        string type, JsonElement? payload, AppDbContext db, IConnectionRegistry registry, ILogger logger,
+        Observability.SonicRelayMetrics metrics, CancellationToken ct)
+    {
+        var participant = await db.SessionParticipants.SingleOrDefaultAsync(x => x.Id == participantId, ct);
+        if (participant is not null)
+        {
+            // This AppDbContext is scoped to the whole WebSocket connection, so its tracked copy
+            // of the row can be minutes old — long enough for the session owner to have revoked
+            // this participant's publish permission over HTTP in the meantime. Without a reload
+            // the identity map would answer the authorization check with the permission the
+            // participant had when it connected, and revocation would not take effect until the
+            // socket was reopened.
+            await db.Entry(participant).ReloadAsync(ct);
+            if (db.Entry(participant).State == EntityState.Detached) participant = null;
+        }
+        if (participant is null)
+        {
+            await SendErrorAsync(metrics, sendAsync, session.Id, participantId, "participant_not_found", ct);
+            return;
+        }
+
+        if (type == CapabilitiesMessageType)
+        {
+            var requestedSend = ReadBoolean(payload, "canSendAudio");
+            var requestedReceive = ReadBoolean(payload, "canReceiveAudio");
+            if (requestedSend is null && requestedReceive is null)
+            {
+                await SendErrorAsync(metrics, sendAsync, session.Id, participantId, "invalid_message", ct);
+                return;
+            }
+            // The one hard rule of duplex: publishing is a backend decision. Refusing the whole
+            // message (rather than silently clamping it) is what lets a client tell "the server
+            // says no" apart from "the server accepted what I asked for".
+            if (requestedSend == true && !participant.AudioSendAllowed)
+            {
+                logger.LogInformation(
+                    "Rejected an audio publish capability from participant {ParticipantId} in session {SessionId}: not authorized",
+                    participantId, session.Id);
+                await SendErrorAsync(metrics, sendAsync, session.Id, participantId, "audio_send_not_authorized", ct);
+                return;
+            }
+            if (requestedSend.HasValue) participant.CanSendAudio = requestedSend.Value;
+            if (requestedReceive.HasValue) participant.CanReceiveAudio = requestedReceive.Value;
+        }
+        else
+        {
+            var muted = ReadBoolean(payload, "muted");
+            if (muted is null)
+            {
+                await SendErrorAsync(metrics, sendAsync, session.Id, participantId, "invalid_message", ct);
+                return;
+            }
+            participant.AudioMuted = muted.Value;
+        }
+
+        await db.SaveChangesAsync(ct);
+        // Nothing about the media itself is inspected or logged here — only which participant
+        // changed state, exactly as the routing logs do for SDP and ICE.
+        logger.LogDebug(
+            "Applied {MessageType} for participant {ParticipantId} in session {SessionId}",
+            type, participantId, session.Id);
+        await BroadcastToSessionAsync(registry, session.Id, type, participantId,
+            CapabilitiesPayload(participant, session.Mode), ct);
+    }
+
+    /// <summary>
+    /// Tells a freshly connected participant what the peers already in the session can do. Peers
+    /// that join later announce themselves through <c>session.joined</c>, but the ones already
+    /// connected would otherwise never be described to the newcomer — which in a duplex session
+    /// is exactly what it needs to know before deciding whether to expect audio from them.
+    /// </summary>
+    private static async Task SendPeerRosterAsync(Func<ReadOnlyMemory<byte>, CancellationToken, Task> sendAsync,
+        AppDbContext db, IConnectionRegistry registry, StreamSession session, Guid participantId, CancellationToken ct)
+    {
+        var connections = await registry.ListBySessionAsync(session.Id, ct);
+        var peerIds = connections.Select(x => x.ParticipantId).Where(x => x != participantId).Distinct().ToList();
+        if (peerIds.Count == 0) return;
+
+        var peers = await db.SessionParticipants.AsNoTracking()
+            .Where(x => peerIds.Contains(x.Id))
+            .OrderBy(x => x.JoinedAt)
+            .ToListAsync(ct);
+        foreach (var peer in peers)
+        {
+            await SendEnvelopeAsync(sendAsync, CapabilitiesMessageType, session.Id, peer.Id, participantId,
+                CapabilitiesPayload(peer, session.Mode), ct);
+        }
+    }
+
+    /// <summary>
+    /// Republishes a participant's audio state after the session owner changed it over HTTP
+    /// (<c>POST /api/sessions/{id}/participants/{participantId}/audio-permission</c>). The
+    /// revoked participant is deliberately included: it has to stop publishing, and finding out
+    /// only on its next capability announcement would leave audio flowing in the meantime.
+    /// </summary>
+    internal static Task BroadcastCapabilitiesAsync(IConnectionRegistry registry, StreamSession session,
+        SessionParticipant participant, CancellationToken ct) =>
+        BroadcastToSessionAsync(registry, session.Id, CapabilitiesMessageType, participant.Id,
+            CapabilitiesPayload(participant, session.Mode), ct);
+
+    /// <summary>
+    /// The single payload shape for everything that describes a participant:
+    /// <c>session.joined</c>, <c>participant.reconnected</c>, <c>participant.capabilities</c> and
+    /// <c>participant.audio_state_changed</c>. <c>participantId</c> and <c>role</c> keep the
+    /// meaning they had before duplex existed, so older clients are unaffected by the rest.
+    /// </summary>
+    private static object CapabilitiesPayload(SessionParticipant participant, string sessionMode) => new
+    {
+        participantId = participant.Id,
+        role = participant.Role,
+        sessionMode,
+        audioSendAllowed = participant.AudioSendAllowed,
+        canSendAudio = participant.CanSendAudio,
+        canReceiveAudio = participant.CanReceiveAudio,
+        audioMuted = participant.AudioMuted
+    };
+
+    private static bool? ReadBoolean(JsonElement? payload, string property) =>
+        payload is { ValueKind: JsonValueKind.Object } element
+            && element.TryGetProperty(property, out var value)
+            && value.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? value.GetBoolean()
+                : null;
 
     private static async Task<byte[]?> ReceiveMessageAsync(WebSocket socket, CancellationToken ct)
     {
@@ -372,6 +543,12 @@ public static class SignalingWebSocketEndpoint
             return false;
         }
     }
+
+    /// <summary>Broadcast to every connection in the session, including the originating one.</summary>
+    private static Task BroadcastToSessionAsync(IConnectionRegistry registry, Guid sessionId, string type,
+        Guid? fromParticipantId, object? payload, CancellationToken ct) =>
+        // Guid.Empty is never a participant id, so nothing is excluded.
+        BroadcastAsync(registry, sessionId, Guid.Empty, type, fromParticipantId, payload, ct);
 
     private static async Task BroadcastAsync(IConnectionRegistry registry, Guid sessionId, Guid excludedParticipantId,
         string type, Guid? fromParticipantId, object? payload, CancellationToken ct)
