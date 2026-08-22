@@ -26,7 +26,7 @@ Two rules run through everything below:
 | Pairing challenge | `pairing_challenges` | HMAC of a short-lived pairing code, publisher `deviceId` | `CreatedAt` | 24h after expiry/consumption; 82 days absolute | hard delete |
 | Device pairing | `device_pairings` | publisher and viewer `deviceId` | `CreatedAt` | 82 days | hard delete |
 | Streaming session | `stream_sessions` | session id, source `deviceId`, status, timestamps | `CreatedAt` | 82 days | hard delete |
-| Session participant | `session_participants` | session id, `deviceId`, role, connection id | `JoinedAt` | 24h after disconnect; 82 days absolute | hard delete |
+| Session participant | `session_participants` | session id, `deviceId`, role, connection id, audio capability/mute flags | `JoinedAt` | 24h after disconnect; 82 days absolute | hard delete |
 | Session join code | Redis (`ISessionCodeStore`) | HMAC of the join code → session id | write time | Redis TTL (minutes), dropped on session delete | expire / hard delete |
 | Signaling metadata | `signaling_events` | session id, participant ids, event type | `CreatedAt` | 82 days | hard delete |
 | Relay preferences | `relay_device_settings` | `deviceId`, relay mode, custom TURN URI/credentials | `CreatedAt` | 82 days | hard delete |

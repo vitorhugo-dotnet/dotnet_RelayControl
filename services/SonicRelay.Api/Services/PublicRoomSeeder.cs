@@ -54,6 +54,7 @@ public sealed class PublicRoomSeeder
                 Id = PublicSessionId,
                 SourceDeviceId = VirtualPublisherDeviceId,
                 Status = SessionStatuses.Active,
+                Mode = SessionModes.Broadcast,
                 MaxViewers = 20, // caller (PublicRoomPublisherService) overwrites from PublicRoomOptions
                 CodeExpiresAt = DateTimeOffset.MaxValue, // never used: joins go through JoinByIdAsync, not the code path
                 StartedAt = now,
@@ -78,7 +79,7 @@ public sealed class PublicRoomSeeder
             && x.Role == ParticipantRoles.Publisher, ct);
         if (publisherParticipant is null)
         {
-            db.SessionParticipants.Add(new SessionParticipant
+            var participant = new SessionParticipant
             {
                 Id = Guid.NewGuid(),
                 SessionId = PublicSessionId,
@@ -86,7 +87,11 @@ public sealed class PublicRoomSeeder
                 Role = ParticipantRoles.Publisher,
                 Status = ParticipantStatuses.Connected,
                 JoinedAt = now
-            });
+            };
+            // The public radio is a one-way broadcast; the virtual publisher transmits and
+            // listeners only receive, exactly as SessionAudioPolicy defines for that mode.
+            SessionAudioPolicy.ApplyDefaults(participant, session.Mode);
+            db.SessionParticipants.Add(participant);
         }
 
         await db.SaveChangesAsync(ct);

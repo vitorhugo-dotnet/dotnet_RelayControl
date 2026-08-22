@@ -84,14 +84,27 @@ All session routes require a `DeviceBearer` token; the caller's own device (from
 | `POST` | `/api/sessions/{sessionId}/end` | `session:end` | Publisher-only; marks the session ended, disconnects participants and removes the Redis code. Idempotently returns the ended session. |
 | `POST` | `/api/sessions/{sessionId}/rotate-code` | `session:end` | Publisher-only; rejects ended/expired sessions with `409`, invalidates the previous code and returns a new code. |
 | `POST` | `/api/sessions/join` | `session:join` | Resolves a valid code, enforces the viewer limit, creates/reconnects a participant for the caller's device and activates a waiting session. Also requires an active `DevicePairing` between the caller's device and the session's source device. |
+| `GET` | `/api/sessions/{sessionId}/participants` | `DeviceAuthenticated` | Returns the session mode and every participant's presence and audio capabilities, to the publisher or any participant; inaccessible sessions return `404`. |
+| `POST` | `/api/sessions/{sessionId}/participants/{participantId}/audio-permission` | `session:end` | Publisher-only; grants or revokes one participant's permission to publish audio. Duplex sessions only (`409 session_not_duplex` otherwise). |
 
 Create request:
 
 ```json
-{ "maxViewers": 3 }
+{ "maxViewers": 3, "mode": "broadcast" }
 ```
 
 `maxViewers` defaults to `Sessions:MaxViewersPerSession` and must be at least one. There is currently no upper bound.
+
+`mode` selects the audio direction of the session and cannot be changed afterwards:
+
+| Mode | Meaning |
+| --- | --- |
+| `broadcast` (default) | The publisher transmits and the other participants only receive. |
+| `duplex` | Every authorized participant may send and receive audio on the same peer connection. |
+
+The value is trimmed and lowercased; omitting it (or sending `null`) means `broadcast`, so a
+client written before duplex existed keeps creating one-way sessions. Anything else returns
+`400` with `{ "code": "invalid_session_mode" }`. See [bidirectional audio](#bidirectional-audio-duplex-sessions).
 
 Join request:
 
@@ -101,7 +114,87 @@ Join request:
 
 Codes are trimmed, uppercased and must contain exactly six ASCII letters/digits. A new viewer participant needs both an active DevicePairing to the session's source device and the current session join code. Wrong, malformed, expired and terminal-session codes, as well as a missing/revoked pairing for a new participant, all return the same `404` invalid/expired-code response. Existing participants may reconnect after pairing revocation until the session ends. Despite the store method name `RedeemAsync`, a successful lookup does not consume a code; it remains reusable until rotation, session end or expiry.
 
-Session responses contain `id`, `sourceDeviceId`, `status`, `maxViewers`, `codeExpiresAt`, `startedAt`, `endedAt`, `createdAt`, and `code` when a new code is issued.
+Session responses contain `id`, `sourceDeviceId`, `status`, `mode`, `maxViewers`, `codeExpiresAt`, `startedAt`, `endedAt`, `createdAt`, and `code` when a new code is issued. `GET /api/sessions/active` and `GET /api/sessions/discoverable` project `mode` as well.
+
+## Bidirectional audio (duplex sessions)
+
+A duplex session lets authorized participants send and receive audio over the same WebRTC
+connection. The API's role does not change: it authenticates, authorizes, tracks presence and
+forwards signaling, and never receives, mixes, transcodes or stores audio. Media still flows
+directly between peers, or through coturn when a direct path is impossible.
+
+### Who is allowed to publish
+
+Publishing is a backend decision, not a client claim. Every participant carries two separate
+flags:
+
+| Field | Owner | Meaning |
+| --- | --- | --- |
+| `audioSendAllowed` | Backend | Whether the participant is *authorized* to publish audio. A client can never raise it. |
+| `canSendAudio` | Client, clamped | Whether the participant currently *intends* to publish. Rejected outright while `audioSendAllowed` is false. |
+| `canReceiveAudio` | Client | Whether the participant wants to receive audio. Carries no authorization weight. |
+| `audioMuted` | Client | The last mute state the participant announced. |
+
+Defaults are derived from the session mode and the role when the participant joins:
+
+| Session mode | Role | `audioSendAllowed` | `canSendAudio` | `canReceiveAudio` |
+| --- | --- | --- | --- | --- |
+| `broadcast` | `publisher` | `true` | `true` | `false` |
+| `broadcast` | `viewer` | `false` | `false` | `true` |
+| `duplex` | any | `true` | `true` | `true` |
+
+`publisher` and `viewer` keep their existing meaning as routing and capacity concepts. In a
+duplex session, "viewer" only means "a participant that is not the session owner" — it says
+nothing about audio direction.
+
+The session's own device can revoke or restore one participant's permission at any time:
+
+```text
+POST /api/sessions/{sessionId}/participants/{participantId}/audio-permission
+{ "canSendAudio": false }
+```
+
+Only the session's publisher device may call it, only while the session is live (`409
+session_terminal` otherwise), and only on a duplex session (`409 session_not_duplex`). A
+session the caller does not own returns `404`. Revoking also clears the participant's declared
+`canSendAudio` and immediately broadcasts a `participant.capabilities` frame to everyone in the
+session, the revoked participant included, so it stops publishing without waiting to be told by
+a peer.
+
+`GET /api/sessions/{sessionId}/participants` returns the same state for the whole session:
+
+```json
+{
+  "sessionId": "<uuid>",
+  "mode": "duplex",
+  "participants": [
+    {
+      "participantId": "<uuid>",
+      "role": "publisher",
+      "status": "connected",
+      "audioSendAllowed": true,
+      "canSendAudio": true,
+      "canReceiveAudio": true,
+      "audioMuted": false,
+      "joinedAt": "2026-08-22T14:00:00Z",
+      "leftAt": null,
+      "isSelf": true
+    }
+  ]
+}
+```
+
+Device ids are deliberately not projected: participant ids are what signaling addresses, and a
+device id is a durable identifier peers have no reason to learn from each other.
+
+### What the backend cannot enforce
+
+The API does not parse SDP (see [ADR 0001](adr/0001-control-plane-only.md)), so it cannot see
+that a peer attached an audio track it was not authorized to send. The server is the authority
+on *who may publish*, and it publishes that authority to every participant; the clients are
+responsible for the last step: **reject or ignore inbound audio from a peer whose latest
+server-sent `audioSendAllowed` is false**. Treat the server's `participant.capabilities` frames
+as the only source of truth for that — never a peer's own claim.
 
 ## WebSocket signaling
 
@@ -173,6 +266,22 @@ Validation failures return HTTP `400`, `401`, `403`, `404` or `410` before the u
 
 Ao admitir um socket, o servidor envia ao novo socket um `session.joined` sobre ele próprio (`from: null`) e anuncia o novo participante aos peers já conectados (`from: <new-participant-uuid>`). O payload sempre contém `participantId` e `role`. Assim, o Publisher descobre cada Viewer sem compartilhar IDs fora do protocolo; o Viewer descobre o Publisher quando recebe `publisher.ready`.
 
+Além de `participantId` e `role`, o payload traz o estado de áudio do participante — `sessionMode`, `audioSendAllowed`, `canSendAudio`, `canReceiveAudio` e `audioMuted` (ver [áudio bidirecional](#bidirectional-audio-duplex-sessions)). Clients anteriores ao modo duplex simplesmente ignoram os campos extras:
+
+```json
+{
+  "participantId": "<participant-uuid>",
+  "role": "publisher",
+  "sessionMode": "duplex",
+  "audioSendAllowed": true,
+  "canSendAudio": true,
+  "canReceiveAudio": true,
+  "audioMuted": false
+}
+```
+
+Logo após o próprio `session.joined`, o novo socket recebe um `participant.capabilities` para cada peer **já conectado** (`from` é o peer descrito). Peers que entram depois se anunciam sozinhos via `session.joined`; sem esse roster inicial, os que já estavam conectados nunca seriam descritos ao recém-chegado — exatamente o que uma sessão duplex precisa saber antes de decidir se espera áudio de cada um.
+
 ### Client messages
 
 Clients send the same envelope shape. `type` is required. `messageId` may be supplied as a UUID and is preserved; otherwise the server generates it. Client `sessionId`, `from`, and `timestamp` values are never trusted. The server derives the session from the connection, overwrites `from` with the authenticated participant, and assigns its own timestamp.
@@ -195,7 +304,13 @@ Um client precisa enviar apenas `type`, `to`, `payload` e, opcionalmente, `messa
 - `webrtc.offer`
 - `webrtc.answer`
 - `webrtc.ice_candidate`
+- `webrtc.renegotiate`
 - `pong`
+
+These types describe the sender's own state instead of addressing one peer, so they take **no** `to`. The server validates them, persists the result and broadcasts the authoritative version to the whole session, sender included:
+
+- `participant.capabilities`
+- `participant.audio_state_changed`
 
 The server emits a normalized routed frame:
 
@@ -211,7 +326,9 @@ The server emits a normalized routed frame:
 }
 ```
 
-`session.joined`, `session.left`, `session.ended`, `participant.disconnected`, `participant.reconnected`, and `error` are server-generated types and are rejected when sent by a client. Routing is constrained to the current session. Errors use the canonical envelope with `type: "error"` and a payload such as `{ "code": "participant_not_found" }`. Other error codes are `invalid_message`, `unsupported_message_type` and `invalid_recipient`.
+`session.joined`, `session.left`, `session.ended`, `participant.disconnected`, `participant.reconnected`, and `error` are server-generated types and are rejected when sent by a client. Routing is constrained to the current session. Errors use the canonical envelope with `type: "error"` and a payload such as `{ "code": "participant_not_found" }`. Other error codes are `invalid_message`, `unsupported_message_type`, `invalid_recipient` and `audio_send_not_authorized`.
+
+`participant.capabilities` and `participant.audio_state_changed` are also emitted by the server, but unlike the types above they may be sent by a client about itself — the server answers with its own authoritative version rather than forwarding the client's frame.
 
 ### Reconnect grace period
 
@@ -274,6 +391,63 @@ Publisher e Viewer enviam candidates conforme a biblioteca WebRTC os descobre (t
 
 Configure STUN e TURN/coturn nos clients ao criar a peer connection. Essas credenciais não passam pelo payload de signaling e nunca devem ser incorporadas a exemplos, logs ou repositórios públicos.
 
+### Capabilities, mute e renegociação (duplex)
+
+Numa sessão `duplex` os dois lados podem publicar áudio na **mesma** `RTCPeerConnection`
+(`sendrecv`), em vez de o Publisher ser o único a adicionar faixa. O fluxo de offer/answer e
+ICE acima não muda; o que muda é que ambos anunciam o que fazem e renegociam quando a faixa
+local aparece ou some.
+
+Anuncie a própria capacidade logo após `session.joined` (sem `to`):
+
+```json
+{
+  "type": "participant.capabilities",
+  "payload": { "canSendAudio": true, "canReceiveAudio": true }
+}
+```
+
+O servidor recusa `canSendAudio: true` de um participante sem autorização, respondendo
+`error` com `{ "code": "audio_send_not_authorized" }` e **não** aplicando nada da mensagem.
+Aceita, ele persiste o estado e envia a versão autoritativa a toda a sessão — inclusive de
+volta ao remetente, que assim nunca precisa supor que o pedido foi aplicado literalmente. Os
+dois campos são opcionais individualmente, mas a mensagem precisa conter ao menos um deles
+(caso contrário: `invalid_message`).
+
+Mute e unmute usam o mesmo padrão (também sem `to`):
+
+```json
+{
+  "type": "participant.audio_state_changed",
+  "payload": { "muted": true }
+}
+```
+
+O broadcast resultante de ambas as mensagens usa o mesmo payload do `session.joined`
+(`participantId`, `role`, `sessionMode`, `audioSendAllowed`, `canSendAudio`, `canReceiveAudio`,
+`audioMuted`), com `from` igual ao participante descrito. Trate esse frame como a única fonte
+de verdade sobre o que cada peer pode fazer: um peer que anuncia áudio sem
+`audioSendAllowed: true` deve ter a faixa recusada ou ignorada localmente.
+
+Para adicionar ou remover uma faixa numa sessão que já está de pé, peça renegociação ao peer em
+vez de refazer a sessão:
+
+```json
+{
+  "type": "webrtc.renegotiate",
+  "to": "<other-participant-uuid>",
+  "payload": { "reason": "adding-microphone-track" }
+}
+```
+
+`webrtc.renegotiate` é encaminhado como qualquer outra mensagem direcionada — o `payload` é
+opaco para a API. Quem recebe gera uma nova `webrtc.offer` na conexão existente e o ciclo
+offer/answer/ICE se repete sem que a sessão, os participantes ou o join code sejam recriados.
+
+Numa chamada 1:1, uma única peer connection bidirecional basta. Para grupos pequenos o modelo
+mesh continua funcionando (uma peer connection por par), mas o custo de upload e CPU cresce
+rápido; salas grandes exigiriam uma SFU, que está fora do escopo.
+
 ### O que o backend valida
 
 - token `DeviceBearer` e upgrade WebSocket;
@@ -283,7 +457,9 @@ Configure STUN e TURN/coturn nos clients ao criar a peer connection. Essas crede
 - participação do device autenticado na sessão;
 - JSON válido, `type` permitido, limite de 64 KiB e frame textual;
 - presença/formato de `to` e pertencimento do destinatário à mesma sessão;
-- identidade do remetente, derivada do socket autenticado.
+- identidade do remetente, derivada do socket autenticado;
+- autorização para publicar áudio antes de aceitar `canSendAudio: true`, relida do banco a cada
+  mensagem (uma revogação feita por HTTP vale imediatamente, sem esperar o socket reabrir).
 
 ### O que o backend não inspeciona
 
@@ -314,6 +490,7 @@ Esse limite é deliberado: o backend coordena peers e trata `payload` como JSON 
 - Opus roda nos clients através do stack WebRTC, não no ASP.NET Core.
 - `to` recebe um **participant ID**, não user ID, device ID ou session ID.
 - Uma sessão com vários Viewers exige uma peer connection Publisher↔Viewer para cada Viewer no MVP; não existe SFU.
+- `duplex` não faz o backend "abrir o microfone": ele só autoriza e propaga estado. Quem captura, envia e recusa faixa não autorizada é o client.
 
 Text messages may be fragmented but may not exceed 64 KiB. Binary frames are rejected. Disconnects broadcast `session.left` to other live participants. When the session becomes terminal, the server sends `session.ended` and closes routing for that connection. There is no persisted signaling history; `SignalingEvent` is mapped in EF Core but the endpoint does not write it.
 

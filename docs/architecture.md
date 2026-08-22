@@ -149,6 +149,7 @@ erDiagram
         uuid id PK
         uuid sourceDeviceId
         string status
+        string mode
         int maxViewers
         datetime codeExpiresAt
     }
@@ -159,6 +160,10 @@ erDiagram
         string role
         string status
         string connectionId
+        bool audioSendAllowed
+        bool canSendAudio
+        bool canReceiveAudio
+        bool audioMuted
     }
     DEVICE_PAIRING {
         uuid id PK
@@ -179,9 +184,13 @@ erDiagram
 
 The absent foreign keys are also what makes device-identity rotation possible: a device's rows are re-pointed at a replacement identity and the old row is deleted in the same transaction, which a database-level `ON DELETE CASCADE` would turn into a teardown of the live session it was meant to preserve. Referential integrity during deletion is therefore enforced by the retention sweep's ordered graph delete plus an orphan sweep, not by the schema. Every table above carries a collection timestamp, and nothing in it survives past the retention ceiling — see [data retention](data-retention.md).
 
+`StreamSession.mode` is `broadcast` or `duplex` and fixes the session's audio direction at creation; `SessionParticipant.audioSendAllowed` is the backend's decision about whether that participant may publish audio, and the three flags beside it are client-declared state the server clamps, stores and rebroadcasts. See [ADR 0007](adr/0007-duplex-audio-sessions.md).
+
 ## Session and peer topology
 
 A device only sees sessions it publishes or participates in. A publisher is expected to create one peer connection per viewer.
+
+In a `duplex` session the same peer connections carry audio in both directions (`sendrecv`) instead of only publisher-to-viewer; the topology below is unchanged, only the direction of the media on each connection is.
 
 ```mermaid
 flowchart LR
@@ -215,3 +224,4 @@ flowchart TD
 - [ADR 0004: Use authenticated WebSocket signaling](adr/0004-authenticated-websocket-signaling.md)
 - [ADR 0005: Symmetric device credentials with a parallel DeviceBearer scheme](adr/0005-device-identity-credentials.md) — extended in Phase 2 to sessions, signaling and TURN credential issuance
 - [ADR 0006: Remove ASP.NET Core Identity and owner-scoped Device CRUD](adr/0006-remove-identity.md)
+- [ADR 0007: Model bidirectional audio as a session mode with backend-owned publish permission](adr/0007-duplex-audio-sessions.md)

@@ -20,6 +20,7 @@ This repository contains only the backend and its infrastructure.
 | Device identity | Implemented | Devices bootstrap a persistent, HMAC-hashed credential and exchange it for short-lived `DeviceBearer` JWTs; no human account or password exists. See [device identity](docs/device-identity.md). |
 | Device pairing | Implemented | A Windows publisher issues a short-lived pairing challenge/QR code; a Flutter viewer completes it to establish a revocable device pairing. |
 | Sessions | Implemented | Create, list, read, join, rotate code, end and background expiry/cleanup, all owned by device identity. |
+| Bidirectional audio | Implemented | Sessions are created as `broadcast` (default, one-way) or `duplex`; the API authorizes which participants may publish audio, propagates capability and mute changes, and routes renegotiation. Media stays between clients. See [ADR 0007](docs/adr/0007-duplex-audio-sessions.md). |
 | WebSocket signaling | Implemented | Authenticated participant validation and in-process, participant-targeted routing. |
 | Device revocation | Implemented | `POST /api/devices/revoke` and credential rotation (`POST /api/devices/rotate-credential`); no separate account-deletion flow exists since devices are not owned by a human account. |
 | Data retention | Implemented | Everything collected is hard-deleted automatically well inside 90 days, and device identities rotate to a new `deviceId` before the ceiling. See [data retention](docs/data-retention.md). |
@@ -32,6 +33,16 @@ This repository contains only the backend and its infrastructure.
 ASP.NET Core Identity (email/password accounts, `/register`, `/login`, `/refresh`, admin/self-service account deletion) was removed in issue #26 Phase 4 once both clients migrated to device identity; there is no human user account model or admin user-management panel in this API (see [ADR 0006](docs/adr/0006-remove-identity.md)).
 
 See the [client integration protocol](docs/protocol.md) for exact routes and WebRTC signaling flows, the [beginner guide](docs/beginner-guide.md) for a plain-language introduction, [Security](docs/security.md) for implemented controls and known gaps, and [data retention](docs/data-retention.md) for what is stored, for how long, and what deletes it.
+
+### Audio direction
+
+A session fixes its audio direction at creation. `broadcast` (the default, and what a client
+that sends no `mode` gets) keeps the original one-way behavior. `duplex` lets authorized
+participants send and receive on the same WebRTC connection, for intercom or voice-call
+scenarios. Permission to publish is a backend decision — a client can announce that it intends
+to send audio, never that it is allowed to — and the session's own device can revoke it per
+participant at any time. The API still never receives, mixes, transcodes or stores audio; see
+the [client integration protocol](docs/protocol.md#bidirectional-audio-duplex-sessions).
 
 ### Pairing authorization
 

@@ -143,6 +143,28 @@ Em detalhes: os usuários autenticam e registram devices; o Publisher cria a ses
 
 Não comece implementando SDP manual ou um media server. Primeiro faça dois peers trocarem mensagens de signaling falsas; depois conecte WebRTC; por último integre captura e playback.
 
+## 13.1. Áudio nos dois sentidos (modo duplex)
+
+A sessão nasce com uma direção de áudio e ela não muda depois:
+
+- `broadcast` (padrão): um transmite, os outros escutam. É o modo original.
+- `duplex`: os participantes autorizados falam **e** ouvem na mesma conexão WebRTC, como num
+  intercomunicador ou numa chamada de voz.
+
+Duas ideias evitam a confusão mais comum aqui:
+
+1. **Quem pode transmitir é decisão do backend.** O client anuncia a intenção
+   (`participant.capabilities`), o servidor responde com o estado autoritativo, e o dono da
+   sessão pode revogar a permissão de qualquer participante. Um "eu posso falar" vindo do
+   client não vale nada sozinho.
+2. **O backend continua sem tocar no áudio.** Duplex não faz a API misturar, gravar ou
+   retransmitir som; ela só autoriza, guarda presença/estado (mute, capacidades) e encaminha
+   signaling. Quem captura microfone, publica faixa e recusa faixa não autorizada é o client.
+
+Para adicionar ou tirar o microfone no meio de uma sessão já ativa, o client pede
+`webrtc.renegotiate` ao peer e refaz offer/answer na conexão existente — não é preciso criar
+outra sessão nem outro código.
+
 ## 14. Erros comuns de iniciantes
 
 - Achar que WebSocket transporta o áudio. Ele transporta apenas signaling.
@@ -154,6 +176,7 @@ Não comece implementando SDP manual ou um media server. Primeiro faça dois pee
 - Criar uma única peer connection para vários Viewers sem um SFU. O MVP usa uma por Viewer.
 - Tentar capturar WASAPI ou tocar Flutter no backend.
 - Considerar signaling entregue como prova de conexão; os clients precisam observar os estados WebRTC.
+- Achar que o modo `duplex` faz o backend abrir microfone ou misturar áudio; ele só autoriza quem pode publicar e propaga esse estado.
 
 ## 15. Resumo final
 
