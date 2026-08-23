@@ -110,11 +110,15 @@ Em `SonicRelayMetrics`, seguindo os nomes da issue #30 e sem rótulo de alta car
 (nada de `sessionId`, `deviceId` ou IP):
 
 ```text
-screen_share_sessions_created_total
-screen_share_sessions_active
-screen_share_join_rejected_total{reason="device_type"|"viewer_limit"|"invalid_code"}
-screen_share_auto_pairings_created_total
+sonicrelay_screen_share_sessions_created_total
+sonicrelay_screen_share_join_rejected_total{reason="device_type"}
+sonicrelay_screen_share_auto_pairings_created_total
 ```
+
+O prefixo `sonicrelay_` é o que toda métrica existente usa; nomes sem ele ficariam fora das
+regras de scrape e dos alertas já configurados em `observability/`. Não há variante de
+`sessions_active` por modo: o gauge atual é mantido por refcount de conexões de signaling,
+que não conhece o modo da sessão, e acrescentar um rótulo ali alteraria uma série existente.
 
 As métricas existentes não mudam de nome nem de rótulo.
 
