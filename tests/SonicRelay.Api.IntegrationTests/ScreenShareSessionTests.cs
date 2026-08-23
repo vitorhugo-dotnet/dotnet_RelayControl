@@ -123,6 +123,67 @@ public sealed class ScreenShareSessionTests : IClassFixture<SonicRelayApiFactory
         Assert.Equal("session_not_duplex", body.GetProperty("code").GetString());
     }
 
+    [Fact]
+    public async Task A_flutter_viewer_cannot_join_a_screen_share_session_even_when_paired()
+    {
+        var (_, sessionId, code) = await CreateScreenShareSessionAsync();
+        var (viewer, viewerDeviceId) = await BootstrapAsync(DeviceTypes.FlutterViewer, DevicePlatforms.Android);
+        await PairWithSessionSourceAsync(sessionId, viewerDeviceId);
+
+        var response = await viewer.PostAsJsonAsync("/api/sessions/join", new { code });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var body = await ReadJsonAsync(response);
+        Assert.Equal("device_type_not_allowed", body.GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task A_windows_publisher_cannot_join_a_screen_share_session()
+    {
+        var (_, sessionId, code) = await CreateScreenShareSessionAsync();
+        var (publisher, publisherDeviceId) = await BootstrapAsync(DeviceTypes.WindowsPublisher, DevicePlatforms.Windows);
+        await PairWithSessionSourceAsync(sessionId, publisherDeviceId);
+
+        var response = await publisher.PostAsJsonAsync("/api/sessions/join", new { code });
+
+        // windows_publisher has no session:join scope, so it is stopped by authorization
+        // before admission ever runs. Asserting 403 either way is the point: this device
+        // type must never reach a screen session.
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_windows_desktop_device_joins_a_screen_share_session()
+    {
+        var (_, sessionId, code) = await CreateScreenShareSessionAsync();
+        var (viewer, viewerDeviceId) = await BootstrapAsync(DeviceTypes.WindowsDesktop, DevicePlatforms.Windows);
+        // Paired up front so this test isolates the device-type gate: it is the mirror of the
+        // two refusals above, with the device type as the only difference. The unpaired case is
+        // Joining_a_screen_share_session_creates_the_pairing.
+        await PairWithSessionSourceAsync(sessionId, viewerDeviceId);
+
+        var response = await viewer.PostAsJsonAsync("/api/sessions/join", new { code });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    private async Task PairWithSessionSourceAsync(Guid sessionId, Guid viewerDeviceId)
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var sourceDeviceId = await db.StreamSessions.Where(x => x.Id == sessionId)
+            .Select(x => x.SourceDeviceId).SingleAsync();
+        db.DevicePairings.Add(new DevicePairing
+        {
+            Id = Guid.NewGuid(),
+            PublisherDeviceId = sourceDeviceId,
+            ViewerDeviceId = viewerDeviceId,
+            Status = DevicePairingStatuses.Active,
+            CreatedAt = DateTimeOffset.UtcNow
+        });
+        await db.SaveChangesAsync();
+    }
+
     private async Task<(HttpClient Client, Guid DeviceId)> BootstrapAsync(string deviceType, string platform)
     {
         var client = _factory.CreateClient();

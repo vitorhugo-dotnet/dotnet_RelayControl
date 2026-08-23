@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using SonicRelay.Api.Services;
 using SonicRelay.Application.Abstractions;
 using SonicRelay.Domain.DeviceIdentities;
+using SonicRelay.Domain.Devices;
 using SonicRelay.Domain.Sessions;
 using SonicRelay.Infrastructure.Persistence;
 
@@ -297,6 +298,13 @@ public static class SessionEndpoints
             return await ResumeParticipantAsync(existing, session, device, db, loggerFactory, ct);
         }
 
+        // A screen session carries a video track. A device type that cannot render video would
+        // be handed an offer with a video m-line it does not understand, so the gate is on the
+        // server rather than a hope that older clients withdraw politely. It also runs before
+        // the pairing check: being paired must never be a way around it.
+        if (session.Mode == SessionModes.ScreenShare && device.DeviceType != DeviceTypes.WindowsDesktop)
+            return DeviceTypeNotAllowed();
+
         // The public radio room's virtual publisher is intentionally open: any authenticated
         // device may listen without ever pairing with it, real-device pairing only gates a real
         // publisher's session. Requiring a pairing here would make this dependent on the
@@ -474,6 +482,13 @@ public static class SessionEndpoints
         {
             error = "This device is not paired with the publisher of that session.",
             code = "not_paired"
+        }, statusCode: StatusCodes.Status403Forbidden);
+
+    private static IResult DeviceTypeNotAllowed() =>
+        Results.Json(new
+        {
+            error = "This session type is not available for this device.",
+            code = "device_type_not_allowed"
         }, statusCode: StatusCodes.Status403Forbidden);
 
     private static Task<bool> HasActivePairingAsync(AppDbContext db,
