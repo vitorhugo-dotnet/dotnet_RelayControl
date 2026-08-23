@@ -63,6 +63,16 @@ public sealed class DeviceCredentialService(IOptions<DeviceIdentityOptions> opti
             "device:read", "device:manage", "pairing:create", "pairing:revoke",
             "session:create", "session:end", "signaling:connect", "turn:credentials"
         ],
+        // The desktop app is publisher and viewer at once: it shares its own screen and views
+        // another machine's. Rather than widening windows_publisher — which would hand new
+        // privileges to an app that never asked for them — this type carries the union.
+        DeviceTypes.WindowsDesktop =>
+        [
+            "device:read", "device:manage",
+            "pairing:create", "pairing:complete", "pairing:revoke",
+            "session:create", "session:join", "session:end",
+            "signaling:connect", "turn:credentials"
+        ],
         DeviceTypes.FlutterViewer =>
         [
             "device:read", "device:manage", "pairing:complete", "pairing:revoke",

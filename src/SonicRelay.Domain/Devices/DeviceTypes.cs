@@ -7,6 +7,12 @@ public static class DeviceTypes
 {
     public const string WindowsPublisher = "windows_publisher";
     public const string FlutterViewer = "flutter_viewer";
+
+    /// <summary>
+    /// The Windows desktop app (SonicDesktopRelay), which both publishes and views screen
+    /// sessions with one identity — hence the union of the publisher and viewer scopes.
+    /// </summary>
+    public const string WindowsDesktop = "windows_desktop";
 }
 
 public static class DevicePlatforms
