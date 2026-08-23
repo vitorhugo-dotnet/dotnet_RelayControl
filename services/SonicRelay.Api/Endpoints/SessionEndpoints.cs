@@ -45,7 +45,7 @@ public static class SessionEndpoints
         if (mode is null)
             return Results.BadRequest(new
             {
-                error = $"Mode must be '{SessionModes.Broadcast}' or '{SessionModes.Duplex}'.",
+                error = $"Mode must be '{SessionModes.Broadcast}', '{SessionModes.Duplex}' or '{SessionModes.ScreenShare}'.",
                 code = "invalid_session_mode"
             });
 

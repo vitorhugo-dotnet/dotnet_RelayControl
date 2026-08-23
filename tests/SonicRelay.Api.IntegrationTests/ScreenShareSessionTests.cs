@@ -1,7 +1,13 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using SonicRelay.Api.Contracts;
+using SonicRelay.Domain.DeviceIdentities;
 using SonicRelay.Domain.Devices;
+using SonicRelay.Domain.Sessions;
+using SonicRelay.Infrastructure.Persistence;
 using Xunit;
 
 namespace SonicRelay.Api.IntegrationTests;
@@ -60,6 +66,91 @@ public sealed class ScreenShareSessionTests : IClassFixture<SonicRelayApiFactory
             },
             scopes.Order().ToArray());
     }
+
+    [Fact]
+    public async Task Create_in_screen_share_mode_returns_the_mode_and_a_send_only_publisher()
+    {
+        var (client, _) = await BootstrapAsync(DeviceTypes.WindowsDesktop, DevicePlatforms.Windows);
+
+        var response = await client.PostAsJsonAsync("/api/sessions",
+            new { maxViewers = 3, mode = " Screen_Share " });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var body = await ReadJsonAsync(response);
+        Assert.Equal("screen_share", body.GetProperty("mode").GetString());
+
+        var publisher = await GetParticipantAsync(body.GetProperty("id").GetGuid(), ParticipantRoles.Publisher);
+        Assert.True(publisher.AudioSendAllowed);
+        Assert.True(publisher.CanSendAudio);
+        Assert.False(publisher.CanReceiveAudio);
+    }
+
+    [Fact]
+    public async Task An_unknown_mode_is_still_rejected_as_invalid_session_mode()
+    {
+        var (client, _) = await BootstrapAsync(DeviceTypes.WindowsDesktop, DevicePlatforms.Windows);
+
+        var response = await client.PostAsJsonAsync("/api/sessions", new { maxViewers = 1, mode = "remote_desktop" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await ReadJsonAsync(response);
+        Assert.Equal("invalid_session_mode", body.GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task An_omitted_mode_still_means_broadcast()
+    {
+        var (client, _) = await BootstrapAsync(DeviceTypes.WindowsDesktop, DevicePlatforms.Windows);
+
+        var response = await client.PostAsJsonAsync("/api/sessions", new { maxViewers = 1 });
+
+        var body = await ReadJsonAsync(response);
+        Assert.Equal(SessionModes.Broadcast, body.GetProperty("mode").GetString());
+    }
+
+    [Fact]
+    public async Task Audio_permission_on_a_screen_share_session_is_rejected_as_not_duplex()
+    {
+        var (owner, sessionId, _) = await CreateScreenShareSessionAsync();
+        var publisher = await GetParticipantAsync(sessionId, ParticipantRoles.Publisher);
+
+        var response = await owner.PostAsJsonAsync(
+            $"/api/sessions/{sessionId}/participants/{publisher.Id}/audio-permission",
+            new { canSendAudio = false });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var body = await ReadJsonAsync(response);
+        Assert.Equal("session_not_duplex", body.GetProperty("code").GetString());
+    }
+
+    private async Task<(HttpClient Client, Guid DeviceId)> BootstrapAsync(string deviceType, string platform)
+    {
+        var client = _factory.CreateClient();
+        var session = await DeviceIdentityTestHelper.BootstrapAndAuthorizeAsync(client, deviceType, platform);
+        return (client, session.DeviceId);
+    }
+
+    private async Task<(HttpClient Owner, Guid SessionId, string Code)> CreateScreenShareSessionAsync(
+        int maxViewers = 3)
+    {
+        var (client, _) = await BootstrapAsync(DeviceTypes.WindowsDesktop, DevicePlatforms.Windows);
+        var response = await client.PostAsJsonAsync("/api/sessions",
+            new { maxViewers, mode = SessionModes.ScreenShare });
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var body = await ReadJsonAsync(response);
+        return (client, body.GetProperty("id").GetGuid(), body.GetProperty("code").GetString()!);
+    }
+
+    private async Task<SessionParticipant> GetParticipantAsync(Guid sessionId, string role)
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        return await db.SessionParticipants.AsNoTracking()
+            .SingleAsync(x => x.SessionId == sessionId && x.Role == role);
+    }
+
+    private static async Task<JsonElement> ReadJsonAsync(HttpResponseMessage response) =>
+        JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.Clone();
 
     // The token is the contract under test, so the scopes are read out of the JWT itself
     // rather than trusted from the response body.
