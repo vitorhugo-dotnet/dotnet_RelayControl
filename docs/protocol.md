@@ -61,7 +61,11 @@ longer exist and their next use returns `401`. A client that ignores the field
 simply re-bootstraps and re-pairs later. See
 [data retention](data-retention.md#device-identity).
 
-Valid `deviceType`/`platform` pairs are `windows_publisher`/`windows` and `flutter_viewer`/`android|ios`. Revoked devices cannot bootstrap new tokens or create, join or connect to sessions.
+Valid `deviceType`/`platform` pairs are `windows_publisher`/`windows`,
+`windows_desktop`/`windows` and `flutter_viewer`/`android|ios`. `windows_desktop` is the
+Windows screen-sharing app, which both publishes and views with one identity and therefore
+carries the union of the publisher and viewer scopes. Revoked devices cannot bootstrap new
+tokens or create, join or connect to sessions.
 
 ## Device pairing
 
@@ -101,10 +105,12 @@ Create request:
 | --- | --- |
 | `broadcast` (default) | The publisher transmits and the other participants only receive. |
 | `duplex` | Every authorized participant may send and receive audio on the same peer connection. |
+| `screen_share` | The publisher shares a screen and its system audio; the other participants only receive. Audio permissions match `broadcast`. |
 
 The value is trimmed and lowercased; omitting it (or sending `null`) means `broadcast`, so a
 client written before duplex existed keeps creating one-way sessions. Anything else returns
-`400` with `{ "code": "invalid_session_mode" }`. See [bidirectional audio](#bidirectional-audio-duplex-sessions).
+`400` with `{ "code": "invalid_session_mode" }`. See [bidirectional audio](#bidirectional-audio-duplex-sessions)
+and [screen-share sessions](#screen-share-sessions).
 
 Join request:
 
@@ -195,6 +201,30 @@ on *who may publish*, and it publishes that authority to every participant; the 
 responsible for the last step: **reject or ignore inbound audio from a peer whose latest
 server-sent `audioSendAllowed` is false**. Treat the server's `participant.capabilities` frames
 as the only source of truth for that — never a peer's own claim.
+
+## Screen-share sessions
+
+A `screen_share` session carries a video track (the publisher's screen) plus, optionally, the
+publisher's system audio. As with audio, the API neither sees nor forwards the media: it
+authenticates, authorizes, tracks presence and routes signaling.
+
+Two rules apply only to this mode:
+
+- **Only `windows_desktop` devices may join.** Any other device type joining a `screen_share`
+  session gets `403 { "code": "device_type_not_allowed" }`, whether or not it is paired. A
+  client that cannot render video must not be handed an offer containing a video m-line.
+- **The join code establishes the pairing.** A `windows_desktop` device presenting a valid
+  code is admitted even with no prior `DevicePairing`, and the pairing is created as part of
+  the join. The record still exists, so revocation, `GET /api/devices/{deviceId}/pairings`
+  and code-free rejoin through `/discoverable` all keep working.
+
+`broadcast` and `duplex` are unaffected by both rules: they still require a pairing
+established beforehand through `POST /api/pairings/challenges` and `POST /api/pairings/complete`.
+
+The consequence, stated plainly: in a screen session the six-character code is the only
+credential. It has a short TTL, it can be rotated at any time with
+`POST /api/sessions/{sessionId}/rotate-code`, and `GET /api/sessions/{sessionId}/participants`
+lets the publishing app show who is watching for as long as the session lasts.
 
 ## WebSocket signaling
 
