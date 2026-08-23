@@ -167,6 +167,92 @@ public sealed class ScreenShareSessionTests : IClassFixture<SonicRelayApiFactory
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
+    [Fact]
+    public async Task Joining_a_screen_share_session_creates_the_pairing()
+    {
+        var (_, sessionId, code) = await CreateScreenShareSessionAsync();
+        var (viewer, viewerDeviceId) = await BootstrapAsync(DeviceTypes.WindowsDesktop, DevicePlatforms.Windows);
+
+        var response = await viewer.PostAsJsonAsync("/api/sessions/join", new { code });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(await HasActivePairingAsync(sessionId, viewerDeviceId));
+    }
+
+    [Fact]
+    public async Task Rejoining_a_screen_share_session_does_not_duplicate_the_pairing()
+    {
+        var (_, sessionId, code) = await CreateScreenShareSessionAsync();
+        var (viewer, viewerDeviceId) = await BootstrapAsync(DeviceTypes.WindowsDesktop, DevicePlatforms.Windows);
+
+        await viewer.PostAsJsonAsync("/api/sessions/join", new { code });
+        await viewer.PostAsJsonAsync("/api/sessions/join", new { code });
+
+        Assert.Equal(1, await CountActivePairingsAsync(sessionId, viewerDeviceId));
+    }
+
+    [Fact]
+    public async Task Joining_a_broadcast_session_without_a_pairing_is_still_refused()
+    {
+        var (owner, _) = await BootstrapAsync(DeviceTypes.WindowsPublisher, DevicePlatforms.Windows);
+        var created = await owner.PostAsJsonAsync("/api/sessions", new { maxViewers = 1, mode = SessionModes.Broadcast });
+        var createdBody = await ReadJsonAsync(created);
+        var sessionId = createdBody.GetProperty("id").GetGuid();
+        var code = createdBody.GetProperty("code").GetString()!;
+        var (viewer, viewerDeviceId) = await BootstrapAsync(DeviceTypes.FlutterViewer, DevicePlatforms.Android);
+
+        var response = await viewer.PostAsJsonAsync("/api/sessions/join", new { code });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var body = await ReadJsonAsync(response);
+        Assert.Equal("not_paired", body.GetProperty("code").GetString());
+        Assert.False(await HasActivePairingAsync(sessionId, viewerDeviceId));
+    }
+
+    [Fact]
+    public async Task Joining_a_duplex_session_without_a_pairing_is_still_refused()
+    {
+        var (owner, _) = await BootstrapAsync(DeviceTypes.WindowsPublisher, DevicePlatforms.Windows);
+        var created = await owner.PostAsJsonAsync("/api/sessions", new { maxViewers = 1, mode = SessionModes.Duplex });
+        var createdBody = await ReadJsonAsync(created);
+        var sessionId = createdBody.GetProperty("id").GetGuid();
+        var code = createdBody.GetProperty("code").GetString()!;
+        var (viewer, viewerDeviceId) = await BootstrapAsync(DeviceTypes.FlutterViewer, DevicePlatforms.Android);
+
+        var response = await viewer.PostAsJsonAsync("/api/sessions/join", new { code });
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.False(await HasActivePairingAsync(sessionId, viewerDeviceId));
+    }
+
+    [Fact]
+    public async Task The_viewer_limit_still_applies_to_screen_share_sessions()
+    {
+        var (_, _, code) = await CreateScreenShareSessionAsync(maxViewers: 1);
+        var (first, _) = await BootstrapAsync(DeviceTypes.WindowsDesktop, DevicePlatforms.Windows);
+        var (second, _) = await BootstrapAsync(DeviceTypes.WindowsDesktop, DevicePlatforms.Windows);
+
+        Assert.Equal(HttpStatusCode.OK, (await first.PostAsJsonAsync("/api/sessions/join", new { code })).StatusCode);
+        var response = await second.PostAsJsonAsync("/api/sessions/join", new { code });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    private async Task<bool> HasActivePairingAsync(Guid sessionId, Guid viewerDeviceId) =>
+        await CountActivePairingsAsync(sessionId, viewerDeviceId) > 0;
+
+    private async Task<int> CountActivePairingsAsync(Guid sessionId, Guid viewerDeviceId)
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var sourceDeviceId = await db.StreamSessions.Where(x => x.Id == sessionId)
+            .Select(x => x.SourceDeviceId).SingleAsync();
+        return await db.DevicePairings.CountAsync(x =>
+            x.PublisherDeviceId == sourceDeviceId
+            && x.ViewerDeviceId == viewerDeviceId
+            && x.Status == DevicePairingStatuses.Active);
+    }
+
     private async Task PairWithSessionSourceAsync(Guid sessionId, Guid viewerDeviceId)
     {
         await using var scope = _factory.Services.CreateAsyncScope();

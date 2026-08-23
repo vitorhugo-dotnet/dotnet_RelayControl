@@ -313,7 +313,25 @@ public static class SessionEndpoints
         // ever calling GET /api/public-room.
         var isPublicRoomSession = session.SourceDeviceId == PublicRoomSeeder.VirtualPublisherDeviceId;
         if (!isPublicRoomSession && !await HasActivePairingAsync(db, session.SourceDeviceId, device.Id, ct))
-            return NotPaired();
+        {
+            // A screen session is entered with one secret: its join code. Holding a valid code
+            // is what establishes the pairing, rather than the pairing being a prerequisite the
+            // user would have to satisfy with a second code. The row is still created — it is
+            // what carries revocation, the pairings listing and code-free rejoin — so the only
+            // thing dropped is the extra step, not the record. Audio sessions are untouched:
+            // there, a missing pairing is still a refusal.
+            if (session.Mode != SessionModes.ScreenShare) return NotPaired();
+
+            db.DevicePairings.Add(new DevicePairing
+            {
+                Id = Guid.NewGuid(),
+                PublisherDeviceId = session.SourceDeviceId,
+                ViewerDeviceId = device.Id,
+                Status = DevicePairingStatuses.Active,
+                CreatedAt = now,
+                LastUsedAt = now
+            });
+        }
 
         // Viewers mid-reconnect-grace-period still hold their slot, otherwise a new viewer
         // could take it during the grace window and leave a maxViewers=1 session with two
