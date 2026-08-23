@@ -255,6 +255,66 @@ public sealed class ScreenShareSessionTests : IClassFixture<SonicRelayApiFactory
         Assert.DoesNotContain(rejectedDeviceId.ToString(), metrics);
     }
 
+    [Fact]
+    public async Task Windows_publisher_scopes_are_unchanged()
+    {
+        var client = _factory.CreateClient();
+        var session = await DeviceIdentityTestHelper.BootstrapAndAuthorizeAsync(
+            client, DeviceTypes.WindowsPublisher, DevicePlatforms.Windows);
+
+        Assert.Equal(
+            new[]
+            {
+                "device:manage", "device:read", "pairing:create", "pairing:revoke",
+                "session:create", "session:end", "signaling:connect", "turn:credentials"
+            },
+            ScopesInToken(session.AccessToken).Order().ToArray());
+    }
+
+    [Fact]
+    public async Task Flutter_viewer_scopes_are_unchanged()
+    {
+        var client = _factory.CreateClient();
+        var session = await DeviceIdentityTestHelper.BootstrapAndAuthorizeAsync(
+            client, DeviceTypes.FlutterViewer, DevicePlatforms.Android);
+
+        Assert.Equal(
+            new[]
+            {
+                "device:manage", "device:read", "pairing:complete", "pairing:revoke",
+                "session:join", "signaling:connect", "turn:credentials"
+            },
+            ScopesInToken(session.AccessToken).Order().ToArray());
+    }
+
+    [Fact]
+    public async Task Broadcast_audio_defaults_are_unchanged()
+    {
+        var (owner, _) = await BootstrapAsync(DeviceTypes.WindowsPublisher, DevicePlatforms.Windows);
+        var created = await owner.PostAsJsonAsync("/api/sessions", new { maxViewers = 1, mode = SessionModes.Broadcast });
+        var sessionId = (await ReadJsonAsync(created)).GetProperty("id").GetGuid();
+
+        var publisher = await GetParticipantAsync(sessionId, ParticipantRoles.Publisher);
+
+        Assert.True(publisher.AudioSendAllowed);
+        Assert.True(publisher.CanSendAudio);
+        Assert.False(publisher.CanReceiveAudio);
+    }
+
+    [Fact]
+    public async Task Duplex_audio_defaults_are_unchanged()
+    {
+        var (owner, _) = await BootstrapAsync(DeviceTypes.WindowsPublisher, DevicePlatforms.Windows);
+        var created = await owner.PostAsJsonAsync("/api/sessions", new { maxViewers = 1, mode = SessionModes.Duplex });
+        var sessionId = (await ReadJsonAsync(created)).GetProperty("id").GetGuid();
+
+        var publisher = await GetParticipantAsync(sessionId, ParticipantRoles.Publisher);
+
+        Assert.True(publisher.AudioSendAllowed);
+        Assert.True(publisher.CanSendAudio);
+        Assert.True(publisher.CanReceiveAudio);
+    }
+
     private async Task<bool> HasActivePairingAsync(Guid sessionId, Guid viewerDeviceId) =>
         await CountActivePairingsAsync(sessionId, viewerDeviceId) > 0;
 
