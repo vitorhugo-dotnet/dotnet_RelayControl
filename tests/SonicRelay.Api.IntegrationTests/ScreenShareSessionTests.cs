@@ -238,6 +238,23 @@ public sealed class ScreenShareSessionTests : IClassFixture<SonicRelayApiFactory
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
     }
 
+    [Fact]
+    public async Task Screen_share_activity_is_counted_without_high_cardinality_labels()
+    {
+        var (_, _, code) = await CreateScreenShareSessionAsync();
+        var (viewer, _) = await BootstrapAsync(DeviceTypes.WindowsDesktop, DevicePlatforms.Windows);
+        await viewer.PostAsJsonAsync("/api/sessions/join", new { code });
+        var (rejected, rejectedDeviceId) = await BootstrapAsync(DeviceTypes.FlutterViewer, DevicePlatforms.Android);
+        await rejected.PostAsJsonAsync("/api/sessions/join", new { code });
+
+        var metrics = await _factory.CreateClient().GetStringAsync("/metrics");
+
+        Assert.Contains("sonicrelay_screen_share_sessions_created_total", metrics);
+        Assert.Contains("sonicrelay_screen_share_auto_pairings_created_total", metrics);
+        Assert.Contains("sonicrelay_screen_share_join_rejected_total{reason=\"device_type\"}", metrics);
+        Assert.DoesNotContain(rejectedDeviceId.ToString(), metrics);
+    }
+
     private async Task<bool> HasActivePairingAsync(Guid sessionId, Guid viewerDeviceId) =>
         await CountActivePairingsAsync(sessionId, viewerDeviceId) > 0;
 

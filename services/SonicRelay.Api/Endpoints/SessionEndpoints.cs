@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using SonicRelay.Api.Observability;
 using SonicRelay.Api.Services;
 using SonicRelay.Application.Abstractions;
 using SonicRelay.Domain.DeviceIdentities;
@@ -36,7 +37,7 @@ public static class SessionEndpoints
 
     private static async Task<IResult> CreateAsync(CreateSessionRequest request,
         ClaimsPrincipal principal, AppDbContext db, ISessionCodeStore codeStore, IConfiguration configuration,
-        ILoggerFactory loggerFactory, CancellationToken ct)
+        ILoggerFactory loggerFactory, SonicRelayMetrics metrics, CancellationToken ct)
     {
         var device = await DeviceIdentityEndpoints.RequireDeviceAsync(principal, db, ct);
         if (device is null) return Results.Unauthorized();
@@ -74,6 +75,7 @@ public static class SessionEndpoints
         SessionAudioPolicy.ApplyDefaults(publisher, session.Mode);
         db.SessionParticipants.Add(publisher);
         await db.SaveChangesAsync(ct);
+        if (session.Mode == SessionModes.ScreenShare) metrics.ScreenShareSessionCreated();
 
         var code = GenerateCode();
         await codeStore.StoreAsync(HashCode(code, configuration), session.Id, ttl, ct);
@@ -209,7 +211,7 @@ public static class SessionEndpoints
 
     private static async Task<IResult> JoinAsync(JoinSessionRequest request, ClaimsPrincipal principal, AppDbContext db,
         ISessionCodeStore codeStore, IConfiguration configuration, IParticipantAdmissionLock admissionLock,
-        ILoggerFactory loggerFactory, CancellationToken ct)
+        ILoggerFactory loggerFactory, SonicRelayMetrics metrics, CancellationToken ct)
     {
         var device = await DeviceIdentityEndpoints.RequireDeviceAsync(principal, db, ct);
         if (device is null) return Results.Unauthorized();
@@ -237,7 +239,7 @@ public static class SessionEndpoints
             return InvalidCode();
         }
 
-        return await AdmitViewerAsync(session, device, db, admissionLock, loggerFactory, ct);
+        return await AdmitViewerAsync(session, device, db, admissionLock, loggerFactory, metrics, ct);
     }
 
     // Code-free join for a session the caller found through /discoverable. It runs exactly the
@@ -245,7 +247,8 @@ public static class SessionEndpoints
     // A session the caller cannot see is reported as invalid_code rather than not_paired, so
     // this endpoint cannot be used to probe which session ids exist.
     private static async Task<IResult> JoinByIdAsync(Guid sessionId, ClaimsPrincipal principal, AppDbContext db,
-        IParticipantAdmissionLock admissionLock, ILoggerFactory loggerFactory, CancellationToken ct)
+        IParticipantAdmissionLock admissionLock, ILoggerFactory loggerFactory, SonicRelayMetrics metrics,
+        CancellationToken ct)
     {
         var device = await DeviceIdentityEndpoints.RequireDeviceAsync(principal, db, ct);
         if (device is null) return Results.Unauthorized();
@@ -254,14 +257,15 @@ public static class SessionEndpoints
         if (session is null || session.Status is SessionStatuses.Ended or SessionStatuses.Expired)
             return InvalidCode();
 
-        return await AdmitViewerAsync(session, device, db, admissionLock, loggerFactory, ct);
+        return await AdmitViewerAsync(session, device, db, admissionLock, loggerFactory, metrics, ct);
     }
 
     // Shared by both join paths (code and session id): everything that happens once a live
     // session has been resolved. Keeping it in one place is what stops the two entry points
     // from drifting on pairing, viewer-limit or reconnect semantics.
     private static async Task<IResult> AdmitViewerAsync(StreamSession session, DeviceIdentity device,
-        AppDbContext db, IParticipantAdmissionLock admissionLock, ILoggerFactory loggerFactory, CancellationToken ct)
+        AppDbContext db, IParticipantAdmissionLock admissionLock, ILoggerFactory loggerFactory,
+        SonicRelayMetrics metrics, CancellationToken ct)
     {
         // Admission is read-then-insert, so two joins racing each other would otherwise both see
         // "no participant yet" and both insert one. That is not a hypothetical: a device coming
@@ -273,7 +277,7 @@ public static class SessionEndpoints
         using var admission = await admissionLock.AcquireAsync(session.Id, device.Id, ct);
         try
         {
-            return await AdmitViewerCoreAsync(session, device, db, loggerFactory, ct);
+            return await AdmitViewerCoreAsync(session, device, db, loggerFactory, metrics, ct);
         }
         catch (DbUpdateException)
         {
@@ -287,7 +291,7 @@ public static class SessionEndpoints
     }
 
     private static async Task<IResult> AdmitViewerCoreAsync(StreamSession session, DeviceIdentity device,
-        AppDbContext db, ILoggerFactory loggerFactory, CancellationToken ct)
+        AppDbContext db, ILoggerFactory loggerFactory, SonicRelayMetrics metrics, CancellationToken ct)
     {
         var now = DateTimeOffset.UtcNow;
         var logger = loggerFactory.CreateLogger("SonicRelay.Sessions");
@@ -303,7 +307,10 @@ public static class SessionEndpoints
         // server rather than a hope that older clients withdraw politely. It also runs before
         // the pairing check: being paired must never be a way around it.
         if (session.Mode == SessionModes.ScreenShare && device.DeviceType != DeviceTypes.WindowsDesktop)
+        {
+            metrics.ScreenShareJoinRejected("device_type");
             return DeviceTypeNotAllowed();
+        }
 
         // The public radio room's virtual publisher is intentionally open: any authenticated
         // device may listen without ever pairing with it, real-device pairing only gates a real
@@ -331,6 +338,7 @@ public static class SessionEndpoints
                 CreatedAt = now,
                 LastUsedAt = now
             });
+            metrics.ScreenShareAutoPairingCreated();
         }
 
         // Viewers mid-reconnect-grace-period still hold their slot, otherwise a new viewer
