@@ -75,6 +75,25 @@ Current limitation: successful join lookup does not consume a code. A code can b
   `POST /api/webrtc/stats`, via a scope-less `DeviceAuthenticated` policy
   rather than a capability-scoped one.
 
+### Browser origins (CORS)
+
+- The Flutter viewer's web build is the only browser client, so CORS is an
+  explicit allowlist, never `AllowAnyOrigin`: `Cors:AllowedOrigins` (default
+  `https://sonicrelay.hugodotnet.dev`). A fork points it at its own viewer with
+  `Cors__AllowedOrigins__0=https://viewer.example`; configuring the key replaces
+  the default rather than adding to it.
+- Credentials are not allowed. The viewer authenticates with a bearer token in a
+  header and never with a cookie, so no cross-origin request here needs to carry
+  ambient credentials.
+- `Cors:AllowLoopbackOrigins` additionally allows `http://localhost:*` and
+  `http://127.0.0.1:*`, which `flutter run -d chrome` needs because it binds a new
+  random port every launch. It defaults to on outside Production and off in
+  Production, where a loopback origin belongs to the visitor's own machine.
+- The CORS middleware runs before authentication and rate limiting, so a preflight
+  — which carries neither credentials nor a body — is answered without a `401` and
+  without spending the caller's `device-bootstrap` budget.
+- Native clients send no `Origin` header and are unaffected by any of this.
+
 ### Abuse and data exposure
 
 - Fixed-window limits return `429`: device-bootstrap, device-token, pairing-create, pairing-complete, create-session, join-session and rotate-code are all keyed by IP. Create/join/rotate cannot be keyed by device: `DeviceBearer` tokens carry no claim a per-caller limiter could key on.
@@ -94,7 +113,6 @@ Current limitation: successful join lookup does not consume a code. A code can b
 ## Known production gaps
 
 - Device ownership and lifecycle are enforced by handlers; policy names alone do not express those resource checks.
-- There is no CORS configuration. Browser-based clients need an explicit allowlist before use.
 - There is no admin UI/API for device management beyond a device's own rotate/revoke endpoints; a human operator cannot remotely revoke another device's credential. Issue #26 explicitly scopes a human-user admin panel out of this project.
 - `PUT /api/settings/relay` is the one exception to the "devices only manage themselves" rule above: it requires only `device:manage`, but the row it mutates is global relay/coturn configuration shared by every device, not the caller's own device. Any bootstrapped device (bootstrap is anonymous and only IP-rate-limited) can toggle `disableFallback` for every other device or point every other device's TURN traffic at attacker-controlled infrastructure. This is accepted for the current single-operator, self-hosted deployment model (there is no admin/account tier to scope it to) and should be revisited if this backend ever serves multiple independent operators/accounts.
 - The live signaling registry is in memory, preventing safe multi-replica routing without sticky sessions or a backplane.

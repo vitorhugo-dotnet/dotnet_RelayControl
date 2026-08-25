@@ -20,4 +20,11 @@ public static class DevicePlatforms
     public const string Windows = "windows";
     public const string Android = "android";
     public const string Ios = "ios";
+
+    /// <summary>
+    /// A browser tab running the Flutter web build of the viewer. It is a platform,
+    /// not a device type: the web viewer bootstraps as <see cref="DeviceTypes.FlutterViewer"/>
+    /// exactly like the Android and iOS builds, and needs the same scopes.
+    /// </summary>
+    public const string Web = "web";
 }

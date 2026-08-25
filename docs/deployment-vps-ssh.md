@@ -69,6 +69,10 @@ DeviceIdentity__CredentialHmacKey=CHANGE_ME_TO_A_HIGH_ENTROPY_SECRET
 DeviceIdentity__PairingCodeHmacKey=CHANGE_ME_TO_A_HIGH_ENTROPY_SECRET
 DeviceIdentity__TokenSigningKey=CHANGE_ME_TO_A_HIGH_ENTROPY_SECRET_32_BYTES_MIN
 
+# Only needed to serve a viewer on an origin other than the published
+# https://sonicrelay.hugodotnet.dev. Setting index 0 replaces that default.
+#Cors__AllowedOrigins__0=https://viewer.example
+
 DataRetention__Enabled=true
 DataRetention__MaxRetentionDays=90
 DataRetention__CleanupIntervalHours=24
@@ -76,6 +80,8 @@ DataRetention__DeviceIdentityRotationDays=60
 # Must equal the PostgreSQL backup window this host actually keeps.
 DataRetention__BackupRetentionDays=7
 ```
+
+The web viewer is a browser client, so it reaches this API cross-origin and the server must name its origin in `Cors__AllowedOrigins__*`. Left unset, the published viewer origin is allowed; get it wrong and every viewer call fails the browser's preflight before it reaches any endpoint. See [security](security.md#browser-origins-cors).
 
 All three `DeviceIdentity__*` keys are required: sessions, signaling and TURN credential issuance authenticate exclusively via the `DeviceBearer` scheme and have no fallback, so device bootstrap and token issuance fail without them. See [device identity configuration](device-identity.md#configuration).
 
