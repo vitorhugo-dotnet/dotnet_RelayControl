@@ -10,7 +10,10 @@ pairing (issue #26 Phase 3).
 
 1. `POST /api/devices/bootstrap` — a device registers with a `name`,
    `deviceType` (`windows_publisher`, `windows_desktop` or `flutter_viewer`),
-   and `platform`.
+   and `platform`. The two must agree: `windows_publisher` and
+   `windows_desktop` are `windows`-only, and `flutter_viewer` accepts
+   `android`, `ios` or `web` — `web` being the same viewer build served as a
+   browser app. Any other combination is rejected with `400`.
    The response includes the device ID and a credential secret returned
    exactly once; only its HMAC is ever stored.
 2. `POST /api/devices/token` — the device exchanges its ID and secret for a
