@@ -117,5 +117,6 @@ public static class DeviceIdentityEndpoints
 
     private static bool ValidTypePlatform(string? type, string? platform) =>
         (type == DeviceTypes.WindowsPublisher && platform == DevicePlatforms.Windows)
+        || (type == DeviceTypes.WindowsDesktop && platform == DevicePlatforms.Windows)
         || (type == DeviceTypes.FlutterViewer && platform is DevicePlatforms.Android or DevicePlatforms.Ios);
 }

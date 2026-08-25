@@ -78,7 +78,15 @@ public static class SessionModes
     /// <summary>Every authorized participant may publish and receive audio on the same peer connection.</summary>
     public const string Duplex = "duplex";
 
-    public static bool IsSupported(string mode) => mode is Broadcast or Duplex;
+    /// <summary>
+    /// The source shares a screen (video) plus its system audio; the others only receive.
+    /// Audio permissions match <see cref="Broadcast"/>; what the mode adds is a way for the
+    /// backend and the clients to recognise a screen session without parsing SDP, which
+    /// ADR 0001 forbids.
+    /// </summary>
+    public const string ScreenShare = "screen_share";
+
+    public static bool IsSupported(string mode) => mode is Broadcast or Duplex or ScreenShare;
 
     /// <summary>
     /// Trims and lowercases a client-supplied mode, returning null when it is not a supported
@@ -104,8 +112,10 @@ public static class SessionAudioPolicy
 
     /// <summary>
     /// In broadcast the publisher transmits and viewers listen, exactly as before duplex
-    /// existed. In duplex every participant may do both; the session owner can still revoke an
-    /// individual participant's send permission afterwards.
+    /// existed. Screen sharing is one-way too, and says so explicitly rather than falling
+    /// through to the broadcast branch — so a future change to one mode cannot silently
+    /// change the other. In duplex every participant may do both; the session owner can
+    /// still revoke an individual participant's send permission afterwards.
     /// </summary>
     public static AudioDefaults DefaultsFor(string sessionMode, string role) =>
         sessionMode == SessionModes.Duplex

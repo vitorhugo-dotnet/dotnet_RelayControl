@@ -9,7 +9,8 @@ pairing (issue #26 Phase 3).
 ## Flow
 
 1. `POST /api/devices/bootstrap` — a device registers with a `name`,
-   `deviceType` (`windows_publisher` or `flutter_viewer`), and `platform`.
+   `deviceType` (`windows_publisher`, `windows_desktop` or `flutter_viewer`),
+   and `platform`.
    The response includes the device ID and a credential secret returned
    exactly once; only its HMAC is ever stored.
 2. `POST /api/devices/token` — the device exchanges its ID and secret for a
@@ -71,13 +72,20 @@ authenticate exclusively through `DeviceBearer`. `DeviceCredentialService.Scopes
 issues five additional scopes alongside `device:read`/`device:manage`/the
 pairing scopes, split by device type:
 
-| Scope | Windows Publisher | Flutter Viewer | Used by |
-| --- | --- | --- | --- |
-| `session:create` | yes | — | `POST /api/sessions` |
-| `session:end` | yes | — | `POST /api/sessions/{sessionId}/end`, `POST /api/sessions/{sessionId}/rotate-code` |
-| `session:join` | — | yes | `POST /api/sessions/join` |
-| `signaling:connect` | yes | yes | `GET /ws/signaling` |
-| `turn:credentials` | yes | yes | `GET /api/webrtc/ice-servers` |
+| Scope | Windows Publisher | Windows Desktop | Flutter Viewer | Used by |
+| --- | --- | --- | --- | --- |
+| `session:create` | yes | yes | — | `POST /api/sessions` |
+| `session:end` | yes | yes | — | `POST /api/sessions/{sessionId}/end`, `POST /api/sessions/{sessionId}/rotate-code` |
+| `session:join` | — | yes | yes | `POST /api/sessions/join` |
+| `signaling:connect` | yes | yes | yes | `GET /ws/signaling` |
+| `turn:credentials` | yes | yes | yes | `GET /api/webrtc/ice-servers` |
+
+`windows_desktop` (the Windows screen-sharing app) publishes and views with one identity, so
+it carries the union of the other two types' scopes — ten in total: `device:read`,
+`device:manage`, `pairing:create`, `pairing:complete`, `pairing:revoke`, `session:create`,
+`session:join`, `session:end`, `signaling:connect`, `turn:credentials`. It is the only type
+holding both `pairing:create` and `pairing:complete`, and the only one allowed to join a
+`screen_share` session (see [protocol.md](protocol.md#screen-share-sessions)).
 
 Two read-only session routes (`GET /api/sessions/active`, `GET /api/sessions/{sessionId}`)
 and the WebRTC stats endpoint (`POST /api/webrtc/stats`) require only the

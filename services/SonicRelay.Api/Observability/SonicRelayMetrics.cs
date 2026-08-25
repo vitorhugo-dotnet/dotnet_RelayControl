@@ -69,9 +69,29 @@ public sealed class SonicRelayMetrics
             Buckets = [10, 25, 50, 100, 150, 200, 300, 500, 1000]
         });
 
+    private readonly Counter _screenShareSessionsCreated = Metrics.CreateCounter(
+        "sonicrelay_screen_share_sessions_created_total",
+        "Screen-share sessions created.");
+
+    private readonly Counter _screenShareJoinRejected = Metrics.CreateCounter(
+        "sonicrelay_screen_share_join_rejected_total",
+        "Join attempts refused on a screen-share session, by reason.",
+        new CounterConfiguration { LabelNames = ["reason"] });
+
+    private readonly Counter _screenShareAutoPairings = Metrics.CreateCounter(
+        "sonicrelay_screen_share_auto_pairings_created_total",
+        "Device pairings created implicitly by a screen-share join.");
+
     public void RecordMessage(string type) => _signalingMessages.WithLabels(Bounded(type)).Inc();
 
     public void RecordError(string reason) => _signalingErrors.WithLabels(Bounded(reason)).Inc();
+
+    public void ScreenShareSessionCreated() => _screenShareSessionsCreated.Inc();
+
+    /// <summary>Reason must be a bounded enum value — today only "device_type".</summary>
+    public void ScreenShareJoinRejected(string reason) => _screenShareJoinRejected.WithLabels(reason).Inc();
+
+    public void ScreenShareAutoPairingCreated() => _screenShareAutoPairings.Inc();
 
     /// <summary>Marks a signaling connection opened for a session.</summary>
     public void ConnectionOpened(Guid sessionId)

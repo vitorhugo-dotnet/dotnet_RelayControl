@@ -34,9 +34,9 @@ public static class PairingEndpoints
         return app;
     }
 
-    // The "pairing:create" policy already restricts callers to publisher
-    // devices (DeviceCredentialService.ScopesFor only grants that scope to
-    // windows_publisher), so no device-type check is needed here.
+    // No device-type check here: the "pairing:create" policy is the gate, and both device
+    // types that hold that scope (windows_publisher and windows_desktop) may legitimately
+    // issue a pairing code.
     private static async Task<IResult> CreateChallengeAsync(ClaimsPrincipal principal,
         PairingChallengeService challenges, AppDbContext db, TimeProvider time, CancellationToken ct)
     {
@@ -61,8 +61,8 @@ public static class PairingEndpoints
             new CreateChallengeResponse(challenge.Id, code, qrPayload, challenge.ExpiresAt));
     }
 
-    // The "pairing:complete" policy already restricts callers to viewer
-    // devices, mirroring CreateChallengeAsync above.
+    // No device-type check here either, mirroring CreateChallengeAsync: "pairing:complete" is
+    // held by flutter_viewer and windows_desktop, and both may legitimately redeem a code.
     private static async Task<IResult> CompleteAsync(CompletePairingRequest request, ClaimsPrincipal principal,
         PairingChallengeService challenges, AppDbContext db, TimeProvider time, CancellationToken ct)
     {
