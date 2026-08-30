@@ -1,9 +1,13 @@
 using System.Net.WebSockets;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using SonicRelay.Application.Abstractions;
 using SonicRelay.Api.Services;
+using SonicRelay.Domain.DeviceIdentities;
 using SonicRelay.Domain.Sessions;
 using SonicRelay.Infrastructure.Persistence;
 
@@ -40,7 +44,8 @@ public static class SignalingWebSocketEndpoint
 
     private static async Task HandleAsync(HttpContext context, AppDbContext db, IConnectionRegistry registry,
         IParticipantReconnectTracker reconnectTracker, IServiceScopeFactory scopeFactory, IConfiguration configuration,
-        ILoggerFactory loggerFactory, Observability.SonicRelayMetrics metrics)
+        IOptions<SignalingOriginOptions> signalingOriginOptions, ILoggerFactory loggerFactory,
+        Observability.SonicRelayMetrics metrics)
     {
         var logger = loggerFactory.CreateLogger("SonicRelay.Signaling");
         if (!context.WebSockets.IsWebSocketRequest)
@@ -55,42 +60,91 @@ public static class SignalingWebSocketEndpoint
             return;
         }
 
-        var device = await DeviceIdentityEndpoints.RequireDeviceAsync(context.User, db, context.RequestAborted);
-        if (device is null)
-        {
-            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            return;
-        }
+        DeviceIdentity? device;
+        StreamSession? session;
+        SessionParticipant? participant;
+        var grantIdentity = context.User.Identities.FirstOrDefault(identity =>
+            identity.IsAuthenticated
+            && identity.AuthenticationType == Authorization.SignalingGrantAuthenticationHandler.SchemeName);
 
-        var session = await db.StreamSessions.AsNoTracking()
-            .SingleOrDefaultAsync(x => x.Id == sessionId, context.RequestAborted);
-        if (session is null)
+        if (grantIdentity is not null)
         {
-            context.Response.StatusCode = StatusCodes.Status404NotFound;
-            return;
-        }
-        // Code expiry only gates *new joins*; an established session stays alive until it is
-        // ended or expired, so a publisher streaming past the code TTL is not cut off.
-        if (session.Status is SessionStatuses.Ended or SessionStatuses.Expired)
-        {
-            logger.LogInformation("Rejected signaling connection to terminal session {SessionId} with status {SessionStatus}",
-                sessionId, session.Status);
-            context.Response.StatusCode = StatusCodes.Status410Gone;
-            return;
-        }
+            var origins = context.Request.Headers.Origin;
+            if (origins.Count != 1
+                || !signalingOriginOptions.Value.AllowedWebOrigins.Contains(origins[0]!, StringComparer.Ordinal))
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return;
+            }
 
-        // Oldest-first FirstOrDefault, not SingleOrDefault: duplicates are ruled out going
-        // forward by the unique index on (SessionId, DeviceId, Role), but a row pair written
-        // before it existed must not turn every reconnect of that device into a 500 — the
-        // device has no way to recover from that, and the session is still perfectly alive.
-        var participant = await db.SessionParticipants
-            .Where(x => x.SessionId == sessionId && x.DeviceId == device.Id)
-            .OrderBy(x => x.JoinedAt)
-            .FirstOrDefaultAsync(context.RequestAborted);
-        if (participant is null)
+            if (!Guid.TryParse(grantIdentity.FindFirst(JwtRegisteredClaimNames.Sub)?.Value, out var grantDeviceId)
+                || !Guid.TryParse(grantIdentity.FindFirst("session_id")?.Value, out var grantSessionId)
+                || !Guid.TryParse(grantIdentity.FindFirst("participant_id")?.Value, out var grantParticipantId)
+                || grantSessionId != sessionId)
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return;
+            }
+
+            device = await db.DeviceIdentities.AsNoTracking()
+                .SingleOrDefaultAsync(x => x.Id == grantDeviceId, context.RequestAborted);
+            session = await db.StreamSessions.AsNoTracking()
+                .SingleOrDefaultAsync(x => x.Id == grantSessionId, context.RequestAborted);
+            participant = await db.SessionParticipants
+                .SingleOrDefaultAsync(x => x.Id == grantParticipantId
+                    && x.SessionId == grantSessionId
+                    && x.DeviceId == grantDeviceId,
+                    context.RequestAborted);
+
+            if (device?.Status != DeviceIdentityStatuses.Active
+                || session?.Status != SessionStatuses.Active
+                || participant?.Role != ParticipantRoles.Viewer
+                || participant.Status != ParticipantStatuses.Connected
+                || !participant.CanReceiveAudio)
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return;
+            }
+        }
+        else
         {
-            context.Response.StatusCode = StatusCodes.Status403Forbidden;
-            return;
+            device = await DeviceIdentityEndpoints.RequireDeviceAsync(context.User, db, context.RequestAborted);
+            if (device is null)
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return;
+            }
+
+            session = await db.StreamSessions.AsNoTracking()
+                .SingleOrDefaultAsync(x => x.Id == sessionId, context.RequestAborted);
+            if (session is null)
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+            // Code expiry only gates *new joins*; an established session stays alive until it is
+            // ended or expired, so a publisher streaming past the code TTL is not cut off.
+            if (session.Status is SessionStatuses.Ended or SessionStatuses.Expired)
+            {
+                logger.LogInformation("Rejected signaling connection to terminal session {SessionId} with status {SessionStatus}",
+                    sessionId, session.Status);
+                context.Response.StatusCode = StatusCodes.Status410Gone;
+                return;
+            }
+
+            // Oldest-first FirstOrDefault, not SingleOrDefault: duplicates are ruled out going
+            // forward by the unique index on (SessionId, DeviceId, Role), but a row pair written
+            // before it existed must not turn every reconnect of that device into a 500 — the
+            // device has no way to recover from that, and the session is still perfectly alive.
+            participant = await db.SessionParticipants
+                .Where(x => x.SessionId == sessionId && x.DeviceId == device.Id)
+                .OrderBy(x => x.JoinedAt)
+                .FirstOrDefaultAsync(context.RequestAborted);
+            if (participant is null)
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return;
+            }
         }
 
         using var socket = await context.WebSockets.AcceptWebSocketAsync();

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -80,6 +81,8 @@ builder.Services.PostConfigure<TurnOptions>(options =>
     }
 });
 builder.Services.Configure<DeviceIdentityOptions>(builder.Configuration.GetSection("DeviceIdentity"));
+builder.Services.Configure<SignalingOriginOptions>(
+    builder.Configuration.GetSection(SignalingOriginOptions.SectionName));
 builder.Services.Configure<PublicRoomOptions>(builder.Configuration.GetSection(PublicRoomOptions.SectionName));
 builder.Services.AddSingleton<PublicRoomSeeder>();
 builder.Services.AddSingleton<PublicRoomPublisherService>();
@@ -88,28 +91,32 @@ builder.Services.AddSingleton<DeviceCredentialService>();
 builder.Services.AddSingleton<SignalingGrantService>();
 builder.Services.AddSingleton<PairingChallengeService>();
 builder.Services.AddScoped<IAuthorizationHandler, DeviceScopeAuthorizationHandler>();
+builder.Services.AddScoped<IAuthorizationHandler, SignalingGrantAuthorizationHandler>();
 
-builder.Services.AddAuthentication().AddJwtBearer("DeviceBearer", jwtOptions =>
-{
-    // Keep claim types as issued (e.g. "sub", not ClaimTypes.NameIdentifier) so
-    // downstream code reading JwtRegisteredClaimNames.Sub/"cv"/"scope" matches
-    // what DeviceCredentialService.IssueAccessToken actually put in the token.
-    jwtOptions.MapInboundClaims = false;
-    var deviceOptions = builder.Configuration.GetSection("DeviceIdentity").Get<DeviceIdentityOptions>()
-        ?? new DeviceIdentityOptions();
-    jwtOptions.TokenValidationParameters = new TokenValidationParameters
+builder.Services.AddAuthentication(options => options.DefaultForbidScheme = "DeviceBearer")
+    .AddJwtBearer("DeviceBearer", jwtOptions =>
     {
-        ValidIssuer = deviceOptions.Issuer,
-        ValidAudience = deviceOptions.Audience,
-        IssuerSigningKey = new SymmetricSecurityKey(
-            Encoding.UTF8.GetBytes(deviceOptions.TokenSigningKey ?? string.Empty)),
-        ValidateIssuer = true,
-        ValidateAudience = true,
-        ValidateLifetime = true,
-        ValidateIssuerSigningKey = true,
-        ClockSkew = TimeSpan.FromSeconds(30)
-    };
-});
+        // Keep claim types as issued (e.g. "sub", not ClaimTypes.NameIdentifier) so
+        // downstream code reading JwtRegisteredClaimNames.Sub/"cv"/"scope" matches
+        // what DeviceCredentialService.IssueAccessToken actually put in the token.
+        jwtOptions.MapInboundClaims = false;
+        var deviceOptions = builder.Configuration.GetSection("DeviceIdentity").Get<DeviceIdentityOptions>()
+            ?? new DeviceIdentityOptions();
+        jwtOptions.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidIssuer = deviceOptions.Issuer,
+            ValidAudience = deviceOptions.Audience,
+            IssuerSigningKey = new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(deviceOptions.TokenSigningKey ?? string.Empty)),
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ClockSkew = TimeSpan.FromSeconds(30)
+        };
+    })
+    .AddScheme<AuthenticationSchemeOptions, SignalingGrantAuthenticationHandler>(
+        SignalingGrantAuthenticationHandler.SchemeName, _ => { });
 
 builder.Services.AddSingleton<SessionCleanupService>();
 builder.Services.AddSingleton<IHostedService>(services => services.GetRequiredService<SessionCleanupService>());
@@ -173,9 +180,16 @@ builder.Services.AddAuthorization(options =>
         policy.Requirements.Add(new DeviceScopeRequirement());
     });
 
+    options.AddPolicy("signaling:connect", policy =>
+    {
+        policy.AddAuthenticationSchemes("DeviceBearer", SignalingGrantAuthenticationHandler.SchemeName);
+        policy.RequireAuthenticatedUser();
+        policy.Requirements.Add(new DeviceScopeRequirement("signaling:connect"));
+    });
+
     foreach (var scope in new[]
     {
-        "session:create", "session:join", "session:end", "signaling:connect", "turn:credentials",
+        "session:create", "session:join", "session:end", "turn:credentials",
         "device:read", "device:manage", "pairing:create", "pairing:complete", "pairing:revoke"
     })
     {
