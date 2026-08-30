@@ -44,7 +44,7 @@ public sealed class SignalingGrantService
 
     public SignalingGrant Issue(Guid deviceId, Guid sessionId, Guid participantId)
     {
-        var now = _time.GetUtcNow();
+        var now = DateTimeOffset.FromUnixTimeSeconds(_time.GetUtcNow().ToUnixTimeSeconds());
         var expiresAt = now.AddSeconds(DeviceIdentityOptions.SignalingGrantLifetimeSeconds);
         var claims = new[]
         {

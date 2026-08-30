@@ -33,6 +33,25 @@ public sealed class SignalingGrantServiceTests
     }
 
     [Fact]
+    public void Issue_NormalizesFractionalSecondsToTheJwtExpiryBoundary()
+    {
+        var now = new DateTimeOffset(2030, 1, 2, 3, 4, 5, 900, TimeSpan.Zero);
+        var clock = new TestTimeProvider(now);
+        var service = CreateService(clock);
+
+        var issued = service.Issue(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+
+        Assert.Equal(new DateTimeOffset(2030, 1, 2, 3, 5, 5, TimeSpan.Zero), issued.ExpiresAt);
+        clock.Advance(TimeSpan.FromSeconds(59));
+        new JwtSecurityTokenHandler { MapInboundClaims = false }
+            .ValidateToken(issued.Token, service.ValidationParameters, out _);
+        clock.Advance(TimeSpan.FromMilliseconds(200));
+        Assert.ThrowsAny<SecurityTokenException>(() =>
+            new JwtSecurityTokenHandler { MapInboundClaims = false }
+                .ValidateToken(issued.Token, service.ValidationParameters, out _));
+    }
+
+    [Fact]
     public void ValidationParameters_RejectTamperedGrant()
     {
         var service = CreateService(new TestTimeProvider(new DateTimeOffset(2030, 1, 2, 3, 4, 5, TimeSpan.Zero)));
