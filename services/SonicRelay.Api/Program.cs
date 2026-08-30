@@ -85,6 +85,7 @@ builder.Services.AddSingleton<PublicRoomSeeder>();
 builder.Services.AddSingleton<PublicRoomPublisherService>();
 builder.Services.AddSingleton<IHostedService>(services => services.GetRequiredService<PublicRoomPublisherService>());
 builder.Services.AddSingleton<DeviceCredentialService>();
+builder.Services.AddSingleton<SignalingGrantService>();
 builder.Services.AddSingleton<PairingChallengeService>();
 builder.Services.AddScoped<IAuthorizationHandler, DeviceScopeAuthorizationHandler>();
 
