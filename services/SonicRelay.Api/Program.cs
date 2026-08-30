@@ -230,6 +230,7 @@ app.MapPairingEndpoints();
 app.MapSessionEndpoints();
 app.MapWebRtcEndpoints();
 app.MapSettingsEndpoints();
+app.MapSignalingGrantEndpoints();
 app.MapSignalingWebSocketEndpoint();
 app.MapPublicRoomEndpoints();
 
