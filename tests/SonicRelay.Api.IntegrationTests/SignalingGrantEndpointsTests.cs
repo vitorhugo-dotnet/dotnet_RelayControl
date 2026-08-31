@@ -29,10 +29,7 @@ public sealed class SignalingGrantEndpointsTests : IClassFixture<SonicRelayApiFa
     public async Task Grant_preflight_allows_credentials_from_the_configured_web_origin()
     {
         const string allowedOrigin = "https://sonicrelay.hugodotnet.dev";
-        await using var factory = new SonicRelayApiFactory(new Dictionary<string, string?>
-        {
-            ["Signaling:AllowedWebOrigins:0"] = allowedOrigin
-        });
+        await using var factory = new SonicRelayApiFactory();
         using var client = factory.CreateClient();
         using var request = new HttpRequestMessage(HttpMethod.Options, "/api/signaling/grant");
         request.Headers.Add("Origin", allowedOrigin);
