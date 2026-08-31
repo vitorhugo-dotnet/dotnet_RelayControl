@@ -80,6 +80,38 @@ builder.Services.PostConfigure<TurnOptions>(options =>
         options.CredentialTtlSeconds = ttl;
     }
 });
+// CORS exists for exactly one client: the Flutter viewer's web build, whose calls are
+// all cross-origin. Native clients never send an Origin header and are untouched by
+// this. Credentials are deliberately not allowed — the viewer authenticates with a
+// bearer token in a header, never with a cookie, so nothing here needs to be
+// credentialed, and `AllowAnyOrigin` stays off so the allowlist keeps meaning something.
+var corsOptions = builder.Configuration.GetSection(WebClientCorsOptions.SectionName).Get<WebClientCorsOptions>()
+    ?? new WebClientCorsOptions();
+builder.Services.Configure<WebClientCorsOptions>(builder.Configuration.GetSection(WebClientCorsOptions.SectionName));
+builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
+{
+    var allowedOrigins = corsOptions.EffectiveAllowedOrigins;
+    if (corsOptions.ResolveAllowLoopbackOrigins(builder.Environment.IsProduction()))
+    {
+        // `flutter run -d chrome` binds a new random port every launch, so local
+        // development cannot be covered by a fixed list of origins.
+        policy.SetIsOriginAllowed(origin =>
+            allowedOrigins.Contains(origin, StringComparer.Ordinal)
+            || WebClientCorsOptions.IsLoopbackOrigin(origin));
+    }
+    else
+    {
+        policy.WithOrigins([.. allowedOrigins]);
+    }
+
+    policy
+        .AllowAnyMethod()
+        .AllowAnyHeader()
+        // Without this the browser hides Retry-After from the viewer, and a rate-limited
+        // device setup cannot tell the user when to try again.
+        .WithExposedHeaders("Retry-After")
+        .SetPreflightMaxAge(TimeSpan.FromSeconds(corsOptions.PreflightMaxAgeSeconds));
+}));
 builder.Services.Configure<DeviceIdentityOptions>(builder.Configuration.GetSection("DeviceIdentity"));
 builder.Services.Configure<SignalingOriginOptions>(
     builder.Configuration.GetSection(SignalingOriginOptions.SectionName));
@@ -238,6 +270,9 @@ if (app.Configuration.GetValue("Swagger:Enabled", app.Environment.IsDevelopment(
 }
 
 app.UseWebSockets();
+// Ahead of authentication and the rate limiter on purpose: a preflight carries neither
+// credentials nor a body, so letting it reach either would 401 the browser's own probe
+// or spend the caller's device-bootstrap budget before the real request arrives.
 app.UseCors();
 app.UseAuthentication();
 app.UseRateLimiter();
