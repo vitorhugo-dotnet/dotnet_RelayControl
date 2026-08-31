@@ -2,6 +2,8 @@ namespace SonicRelay.Api.Services;
 
 public sealed class DeviceIdentityOptions
 {
+    public const int SignalingGrantLifetimeSeconds = 60;
+
     public string? CredentialHmacKey { get; set; }
     public string? PairingCodeHmacKey { get; set; }
     public string? TokenSigningKey { get; set; }
