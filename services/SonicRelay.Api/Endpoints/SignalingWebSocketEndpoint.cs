@@ -44,7 +44,7 @@ public static class SignalingWebSocketEndpoint
 
     private static async Task HandleAsync(HttpContext context, AppDbContext db, IConnectionRegistry registry,
         IParticipantReconnectTracker reconnectTracker, IServiceScopeFactory scopeFactory, IConfiguration configuration,
-        IOptions<SignalingOriginOptions> signalingOriginOptions, ILoggerFactory loggerFactory,
+        IOptions<WebClientCorsOptions> webClientCorsOptions, ILoggerFactory loggerFactory,
         Observability.SonicRelayMetrics metrics)
     {
         var logger = loggerFactory.CreateLogger("SonicRelay.Signaling");
@@ -71,7 +71,7 @@ public static class SignalingWebSocketEndpoint
         {
             var origins = context.Request.Headers.Origin;
             if (origins.Count != 1
-                || !signalingOriginOptions.Value.AllowedWebOrigins.Contains(origins[0]!, StringComparer.Ordinal))
+                || !webClientCorsOptions.Value.EffectiveAllowedOrigins.Contains(origins[0]!, StringComparer.Ordinal))
             {
                 context.Response.StatusCode = StatusCodes.Status403Forbidden;
                 return;

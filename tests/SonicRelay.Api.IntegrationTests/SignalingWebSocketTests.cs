@@ -609,7 +609,7 @@ public sealed class SignalingWebSocketTests : IClassFixture<SonicRelayApiFactory
     private static SonicRelayApiFactory CreateBrowserFactory(TimeProvider? timeProvider = null) =>
         new(new Dictionary<string, string?>
         {
-            ["Signaling:AllowedWebOrigins:0"] = AllowedWebOrigin
+            ["Cors:AllowedOrigins:0"] = AllowedWebOrigin
         })
         {
             TimeProviderOverride = timeProvider

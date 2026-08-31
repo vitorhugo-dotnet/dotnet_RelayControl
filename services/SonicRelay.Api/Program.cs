@@ -113,13 +113,8 @@ builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
         .SetPreflightMaxAge(TimeSpan.FromSeconds(corsOptions.PreflightMaxAgeSeconds));
 }));
 builder.Services.Configure<DeviceIdentityOptions>(builder.Configuration.GetSection("DeviceIdentity"));
-builder.Services.Configure<SignalingOriginOptions>(
-    builder.Configuration.GetSection(SignalingOriginOptions.SectionName));
-var allowedWebOrigins = builder.Configuration
-    .GetSection(SignalingOriginOptions.SectionName)
-    .Get<SignalingOriginOptions>()?.AllowedWebOrigins ?? [];
 builder.Services.AddCors(options => options.AddPolicy(SignalingGrantEndpoints.CorsPolicyName, policy =>
-    policy.WithOrigins(allowedWebOrigins)
+    policy.WithOrigins([.. corsOptions.EffectiveAllowedOrigins])
         .WithHeaders("Authorization", "Content-Type")
         .WithMethods(HttpMethods.Post)
         .AllowCredentials()));
