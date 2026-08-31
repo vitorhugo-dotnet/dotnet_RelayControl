@@ -83,6 +83,14 @@ builder.Services.PostConfigure<TurnOptions>(options =>
 builder.Services.Configure<DeviceIdentityOptions>(builder.Configuration.GetSection("DeviceIdentity"));
 builder.Services.Configure<SignalingOriginOptions>(
     builder.Configuration.GetSection(SignalingOriginOptions.SectionName));
+var allowedWebOrigins = builder.Configuration
+    .GetSection(SignalingOriginOptions.SectionName)
+    .Get<SignalingOriginOptions>()?.AllowedWebOrigins ?? [];
+builder.Services.AddCors(options => options.AddPolicy(SignalingGrantEndpoints.CorsPolicyName, policy =>
+    policy.WithOrigins(allowedWebOrigins)
+        .WithHeaders("Authorization", "Content-Type")
+        .WithMethods(HttpMethods.Post)
+        .AllowCredentials()));
 builder.Services.Configure<PublicRoomOptions>(builder.Configuration.GetSection(PublicRoomOptions.SectionName));
 builder.Services.AddSingleton<PublicRoomSeeder>();
 builder.Services.AddSingleton<PublicRoomPublisherService>();
@@ -230,6 +238,7 @@ if (app.Configuration.GetValue("Swagger:Enabled", app.Environment.IsDevelopment(
 }
 
 app.UseWebSockets();
+app.UseCors();
 app.UseAuthentication();
 app.UseRateLimiter();
 app.UseAuthorization();

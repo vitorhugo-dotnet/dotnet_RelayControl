@@ -26,6 +26,27 @@ public sealed class SignalingGrantEndpointsTests : IClassFixture<SonicRelayApiFa
     }
 
     [Fact]
+    public async Task Grant_preflight_allows_credentials_from_the_configured_web_origin()
+    {
+        const string allowedOrigin = "https://sonicrelay.hugodotnet.dev";
+        await using var factory = new SonicRelayApiFactory(new Dictionary<string, string?>
+        {
+            ["Signaling:AllowedWebOrigins:0"] = allowedOrigin
+        });
+        using var client = factory.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Options, "/api/signaling/grant");
+        request.Headers.Add("Origin", allowedOrigin);
+        request.Headers.Add("Access-Control-Request-Method", "POST");
+        request.Headers.Add("Access-Control-Request-Headers", "authorization,content-type");
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        Assert.Equal(allowedOrigin, response.Headers.GetValues("Access-Control-Allow-Origin").Single());
+        Assert.Equal("true", response.Headers.GetValues("Access-Control-Allow-Credentials").Single());
+    }
+
+    [Fact]
     public async Task Grant_rejects_an_unknown_session()
     {
         var viewer = await CreatePermittedViewerAsync("unknown-session");

@@ -8,9 +8,12 @@ namespace SonicRelay.Api.Endpoints;
 
 public static class SignalingGrantEndpoints
 {
+    internal const string CorsPolicyName = "SignalingGrantWeb";
+
     public static IEndpointRouteBuilder MapSignalingGrantEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapPost("/api/signaling/grant", IssueAsync)
+            .RequireCors(CorsPolicyName)
             .RequireAuthorization("signaling:connect");
         return app;
     }
