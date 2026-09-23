@@ -19,7 +19,7 @@ public static class SignalingWebSocketEndpoint
     private static readonly HashSet<string> RoutedMessageTypes =
     [
         "publisher.ready", "viewer.ready", "webrtc.offer", "webrtc.answer",
-        "webrtc.ice_candidate", "webrtc.renegotiate", "pong"
+        "webrtc.ice_candidate", "webrtc.renegotiate", "video.receiver_stats", "pong"
     ];
 
     /// <summary>
