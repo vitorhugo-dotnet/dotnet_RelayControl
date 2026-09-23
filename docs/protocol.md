@@ -335,7 +335,34 @@ Um client precisa enviar apenas `type`, `to`, `payload` e, opcionalmente, `messa
 - `webrtc.answer`
 - `webrtc.ice_candidate`
 - `webrtc.renegotiate`
+- `video.receiver_stats`
 - `pong`
+
+`video.receiver_stats` is sent by a viewer to the publisher participant every 2 seconds. Version
+1 has this payload shape (all counters are non-negative integers):
+
+```json
+{
+  "version": 1,
+  "intervalMilliseconds": 2000,
+  "rtpPacketsReceived": 1200,
+  "rtpPacketsLost": 8,
+  "accessUnitsReceived": 60,
+  "incompleteAccessUnits": 1,
+  "decodedFrames": 58,
+  "targetFramesPerSecond": 30.0
+}
+```
+
+The client publisher validates version 1, a 1000–5000 ms interval, counter bounds (each at most
+10,000,000; received plus lost packets at most 10,000,000), `incompleteAccessUnits` no greater
+than `accessUnitsReceived`, and finite target FPS from 1 through 60. The backend treats the
+payload as opaque JSON: it enforces the normal WebSocket message-size limit and authenticated
+same-session recipient routing, but does not parse or interpret these fields. The routed envelope
+sets `from` from the authenticated socket; clients must not trust a sender identity supplied in
+the payload. The publisher further accepts feedback only from a viewer with an active peer in
+that sharing session. This is signaling metadata, not media; RTP/RTCP media remains between the
+peers (or traverses TURN).
 
 These types describe the sender's own state instead of addressing one peer, so they take **no** `to`. The server validates them, persists the result and broadcasts the authoritative version to the whole session, sender included:
 
