@@ -111,6 +111,77 @@ public sealed class SignalingWebSocketTests : IClassFixture<SonicRelayApiFactory
     }
 
     [Fact]
+    public async Task Receiver_stats_are_forwarded_with_authenticated_envelope_metadata()
+    {
+        var sender = await CreateParticipantAsync("receiver-stats-sender");
+        var receiver = await CreateViewerAsync(sender, "receiver-stats-receiver");
+        using var senderSocket = await ConnectAsync(sender);
+        using var receiverSocket = await ConnectAsync(receiver);
+        await ReceiveAsync(senderSocket);
+        await ReceiveAsync(receiverSocket);
+        await ReceiveAsync(senderSocket); // receiver joined
+        await ReceiveAsync(senderSocket); // receiver capability state
+        await ReceiveAsync(receiverSocket); // existing sender capability roster entry
+
+        var messageId = Guid.NewGuid();
+        await SendAsync(senderSocket, new
+        {
+            type = "video.receiver_stats",
+            messageId,
+            sessionId = Guid.NewGuid(),
+            from = Guid.NewGuid(),
+            to = receiver.ParticipantId,
+            timestamp = DateTimeOffset.UnixEpoch,
+            payload = new
+            {
+                version = 1,
+                intervalMs = 2000,
+                rtpPacketsReceived = 90,
+                rtpPacketsLost = 10,
+                accessUnitsReceived = 30,
+                incompleteAccessUnits = 2,
+                decodedFrames = 24,
+                targetFramesPerSecond = 30
+            }
+        });
+
+        using var responseTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var senderResponse = ReceiveAsync(senderSocket, responseTimeout.Token);
+        var receiverResponse = ReceiveReceiverStatsAsync(receiverSocket, responseTimeout.Token);
+        var firstResponse = await Task.WhenAny(senderResponse, receiverResponse);
+        responseTimeout.Cancel();
+        var routed = await firstResponse;
+        if (routed.GetProperty("type").GetString() == "error")
+            Assert.Equal("unsupported_message_type", routed.GetProperty("payload").GetProperty("code").GetString());
+        AssertEnvelope(routed, "video.receiver_stats", sender.SessionId);
+        Assert.Equal(messageId, routed.GetProperty("messageId").GetGuid());
+        Assert.Equal(sender.ParticipantId, routed.GetProperty("from").GetGuid());
+        Assert.Equal(receiver.ParticipantId, routed.GetProperty("to").GetGuid());
+        AssertReceiverStatsPayload(routed);
+    }
+
+    private static void AssertReceiverStatsPayload(JsonElement routed)
+    {
+        var payload = routed.GetProperty("payload");
+        Assert.Equal(1, payload.GetProperty("version").GetInt32());
+        Assert.Equal(2000, payload.GetProperty("intervalMs").GetInt32());
+        Assert.Equal(90, payload.GetProperty("rtpPacketsReceived").GetInt32());
+        Assert.Equal(10, payload.GetProperty("rtpPacketsLost").GetInt32());
+        Assert.Equal(30, payload.GetProperty("accessUnitsReceived").GetInt32());
+        Assert.Equal(2, payload.GetProperty("incompleteAccessUnits").GetInt32());
+        Assert.Equal(24, payload.GetProperty("decodedFrames").GetInt32());
+        Assert.Equal(30, payload.GetProperty("targetFramesPerSecond").GetInt32());
+    }
+
+    private static async Task<JsonElement> ReceiveReceiverStatsAsync(WebSocket socket, CancellationToken ct)
+    {
+        var message = await ReceiveAsync(socket, ct);
+        while (message.GetProperty("type").GetString() == "participant.capabilities")
+            message = await ReceiveAsync(socket, ct);
+        return message;
+    }
+
+    [Fact]
     public async Task Signaling_announces_a_new_participant_to_existing_session_peers()
     {
         var publisher = await CreateParticipantAsync("join-announcement-publisher");
