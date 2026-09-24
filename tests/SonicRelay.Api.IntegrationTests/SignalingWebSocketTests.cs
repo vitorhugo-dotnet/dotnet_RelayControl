@@ -262,7 +262,6 @@ public sealed class SignalingWebSocketTests : IClassFixture<SonicRelayApiFactory
         await ReceiveAsync(senderSocket, testTimeout.Token);
         await ReceiveAsync(receiverSocket, testTimeout.Token);
         await ReceiveAsync(senderSocket, testTimeout.Token); // receiver joined
-        await ReceiveAsync(senderSocket, testTimeout.Token); // receiver capability state
         await ReceiveAsync(receiverSocket, testTimeout.Token); // existing sender capability roster entry
 
         var messageId = Guid.NewGuid();
@@ -720,12 +719,6 @@ public sealed class SignalingWebSocketTests : IClassFixture<SonicRelayApiFactory
     }
 
     private static async Task SendAsync(WebSocket socket, object message, CancellationToken ct = default)
-    {
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(message);
-        await socket.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
-    }
-
-    private static async Task SendAsync(WebSocket socket, object message, CancellationToken ct)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(message);
         await socket.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
