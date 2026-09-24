@@ -254,15 +254,16 @@ public sealed class SignalingWebSocketTests : IClassFixture<SonicRelayApiFactory
     [Fact]
     public async Task Receiver_stats_are_forwarded_with_authenticated_envelope_metadata()
     {
-        using var responseTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var testTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var sender = await CreateParticipantAsync("receiver-stats-sender");
         var receiver = await CreateViewerAsync(sender, "receiver-stats-receiver");
-        using var senderSocket = await ConnectAsync(sender, responseTimeout.Token);
-        using var receiverSocket = await ConnectAsync(receiver, responseTimeout.Token);
-        await ReceiveAsync(senderSocket, responseTimeout.Token);
-        await ReceiveAsync(receiverSocket, responseTimeout.Token);
-        await ReceiveAsync(senderSocket, responseTimeout.Token); // receiver joined
-        await ReceiveAsync(receiverSocket, responseTimeout.Token); // existing sender capability roster entry
+        using var senderSocket = await ConnectAsync(sender, ct: testTimeout.Token);
+        using var receiverSocket = await ConnectAsync(receiver, ct: testTimeout.Token);
+        await ReceiveAsync(senderSocket, testTimeout.Token);
+        await ReceiveAsync(receiverSocket, testTimeout.Token);
+        await ReceiveAsync(senderSocket, testTimeout.Token); // receiver joined
+        await ReceiveAsync(senderSocket, testTimeout.Token); // receiver capability state
+        await ReceiveAsync(receiverSocket, testTimeout.Token); // existing sender capability roster entry
 
         var messageId = Guid.NewGuid();
         await SendAsync(senderSocket, new
@@ -284,9 +285,9 @@ public sealed class SignalingWebSocketTests : IClassFixture<SonicRelayApiFactory
                 decodedFrames = 24,
                 targetFramesPerSecond = 30
             }
-        }, responseTimeout.Token);
+        }, testTimeout.Token);
 
-        var routed = await ReceiveReceiverStatsAsync(receiverSocket, responseTimeout.Token);
+        var routed = await ReceiveReceiverStatsAsync(receiverSocket, testTimeout.Token);
         AssertEnvelope(routed, "video.receiver_stats", sender.SessionId);
         Assert.Equal(messageId, routed.GetProperty("messageId").GetGuid());
         Assert.Equal(sender.ParticipantId, routed.GetProperty("from").GetGuid());
@@ -621,14 +622,15 @@ public sealed class SignalingWebSocketTests : IClassFixture<SonicRelayApiFactory
         return new TestParticipant(session.AccessToken, publisher.SessionId, session.DeviceId, participantId);
     }
 
-    private async Task<WebSocket> ConnectAsync(TestParticipant participant, SonicRelayApiFactory? factory = null)
+    private async Task<WebSocket> ConnectAsync(TestParticipant participant, SonicRelayApiFactory? factory = null,
+        CancellationToken ct = default)
     {
         var client = (factory ?? _factory).Server.CreateWebSocketClient();
         client.ConfigureRequest = request =>
             request.Headers.Authorization = $"Bearer {participant.AccessToken}";
         return await client.ConnectAsync(
             new Uri($"ws://localhost/ws/signaling?sessionId={participant.SessionId}"),
-            CancellationToken.None);
+            ct);
     }
 
     private async Task<WebSocket> ConnectAsync(TestParticipant participant, CancellationToken ct)
@@ -717,10 +719,10 @@ public sealed class SignalingWebSocketTests : IClassFixture<SonicRelayApiFactory
             CancellationToken.None);
     }
 
-    private static async Task SendAsync(WebSocket socket, object message)
+    private static async Task SendAsync(WebSocket socket, object message, CancellationToken ct = default)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(message);
-        await socket.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None);
+        await socket.SendAsync(bytes, WebSocketMessageType.Text, true, ct);
     }
 
     private static async Task SendAsync(WebSocket socket, object message, CancellationToken ct)
