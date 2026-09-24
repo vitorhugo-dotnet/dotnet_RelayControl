@@ -262,7 +262,6 @@ public sealed class SignalingWebSocketTests : IClassFixture<SonicRelayApiFactory
         await ReceiveAsync(senderSocket, testTimeout.Token);
         await ReceiveAsync(receiverSocket, testTimeout.Token);
         await ReceiveAsync(senderSocket, testTimeout.Token); // receiver joined
-        await ReceiveAsync(senderSocket, testTimeout.Token); // receiver capability state
         await ReceiveAsync(receiverSocket, testTimeout.Token); // existing sender capability roster entry
 
         var messageId = Guid.NewGuid();
@@ -631,6 +630,15 @@ public sealed class SignalingWebSocketTests : IClassFixture<SonicRelayApiFactory
         return await client.ConnectAsync(
             new Uri($"ws://localhost/ws/signaling?sessionId={participant.SessionId}"),
             ct);
+    }
+
+    private async Task<WebSocket> ConnectAsync(TestParticipant participant, CancellationToken ct)
+    {
+        var client = _factory.Server.CreateWebSocketClient();
+        client.ConfigureRequest = request =>
+            request.Headers.Authorization = $"Bearer {participant.AccessToken}";
+        return await client.ConnectAsync(
+            new Uri($"ws://localhost/ws/signaling?sessionId={participant.SessionId}"), ct);
     }
 
     private async Task SetSessionStateAsync(Guid sessionId, string status, DateTimeOffset codeExpiresAt)

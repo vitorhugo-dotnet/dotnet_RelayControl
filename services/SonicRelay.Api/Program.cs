@@ -22,6 +22,9 @@ var builder = WebApplication.CreateBuilder(args);
 // SQL at Warning+ so app logs (SonicRelay.*, request diagnostics) stay readable.
 // Overridable via Logging:LogLevel configuration if full SQL is ever needed.
 builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);
+// Launch capability is carried in the public landing route. Suppress ASP.NET's
+// request-start path logging so one-time credentials do not enter application logs.
+builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
 
 builder.Services.AddEndpointsApiExplorer();
 // Name the document explicitly: unconfigured, Swashbuckle titles the Swagger UI
@@ -113,6 +116,7 @@ builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
         .SetPreflightMaxAge(TimeSpan.FromSeconds(corsOptions.PreflightMaxAgeSeconds));
 }));
 builder.Services.Configure<DeviceIdentityOptions>(builder.Configuration.GetSection("DeviceIdentity"));
+builder.Services.Configure<LaunchIntentOptions>(builder.Configuration.GetSection(LaunchIntentOptions.SectionName));
 builder.Services.AddCors(options => options.AddPolicy(SignalingGrantEndpoints.CorsPolicyName, policy =>
     policy.WithOrigins([.. corsOptions.EffectiveAllowedOrigins])
         .WithHeaders("Authorization", "Content-Type")
@@ -123,6 +127,7 @@ builder.Services.AddSingleton<PublicRoomSeeder>();
 builder.Services.AddSingleton<PublicRoomPublisherService>();
 builder.Services.AddSingleton<IHostedService>(services => services.GetRequiredService<PublicRoomPublisherService>());
 builder.Services.AddSingleton<DeviceCredentialService>();
+builder.Services.AddScoped<LaunchIntentService>();
 builder.Services.AddSingleton<SignalingGrantService>();
 builder.Services.AddSingleton<PairingChallengeService>();
 builder.Services.AddScoped<IAuthorizationHandler, DeviceScopeAuthorizationHandler>();
@@ -151,7 +156,9 @@ builder.Services.AddAuthentication(options => options.DefaultForbidScheme = "Dev
         };
     })
     .AddScheme<AuthenticationSchemeOptions, SignalingGrantAuthenticationHandler>(
-        SignalingGrantAuthenticationHandler.SchemeName, _ => { });
+        SignalingGrantAuthenticationHandler.SchemeName, _ => { })
+    .AddScheme<AuthenticationSchemeOptions, LaunchServiceAuthenticationHandler>(
+        LaunchServiceAuthenticationHandler.SchemeName, _ => { });
 
 builder.Services.AddSingleton<SessionCleanupService>();
 builder.Services.AddSingleton<IHostedService>(services => services.GetRequiredService<SessionCleanupService>());
@@ -222,6 +229,12 @@ builder.Services.AddAuthorization(options =>
         policy.Requirements.Add(new DeviceScopeRequirement("signaling:connect"));
     });
 
+    options.AddPolicy("launch-intents:bot", policy =>
+    {
+        policy.AddAuthenticationSchemes(LaunchServiceAuthenticationHandler.SchemeName);
+        policy.RequireAuthenticatedUser();
+        policy.RequireClaim("scope", "launch-intents");
+    });
     foreach (var scope in new[]
     {
         "session:create", "session:join", "session:end", "turn:credentials",
@@ -281,6 +294,7 @@ app.MapMetrics();
 app.MapDeviceIdentityEndpoints();
 app.MapPairingEndpoints();
 app.MapSessionEndpoints();
+app.MapLaunchIntentEndpoints();
 app.MapWebRtcEndpoints();
 app.MapSettingsEndpoints();
 app.MapSignalingGrantEndpoints();

@@ -77,6 +77,8 @@ Docker development stack:
 
 The root `Dockerfile` is the canonical image definition. Run `docker build .` from the repository root; it publishes `services/SonicRelay.Api/SonicRelay.Api.csproj` using a multi-stage, non-root runtime image. Compose and CI/CD use the same Dockerfile and project path.
 
+FrameRelay Discord launch intents use `LAUNCHINTENTS__SERVICETOKEN` and `LAUNCHINTENTS__PUBLICBASEURL` in `infra/.env.example`. Configure the matching service token only in the separate bot deployment; use a strong random value in production. The API stores only hashes of one-time launch capabilities. Public `/open/...` routes contain those short-lived capabilities, so reverse-proxy access logs must redact that route's final path segment.
+
 ```bash
 cp infra/.env.example infra/.env
 docker compose \
