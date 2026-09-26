@@ -26,7 +26,7 @@ public interface IDiscordActivityValidator
     Task<bool> IsPresentAsync(DiscordActivityIdentity identity, CancellationToken ct);
 }
 
-public sealed class DiscordActivityValidator(HttpClient http, Microsoft.Extensions.Options.IOptions<RelayLaunchOptions> options)
+public sealed class DiscordActivityValidator(HttpClient http, Microsoft.Extensions.Options.IOptions<RelayLaunchOptions> options, DiscordActivityInstanceCache instances)
     : IDiscordActivityValidator
 {
     public async Task<DiscordActivityIdentity?> AuthorizeAsync(string code, string instanceId, CancellationToken ct)
@@ -59,20 +59,60 @@ public sealed class DiscordActivityValidator(HttpClient http, Microsoft.Extensio
 
     private async Task<DiscordActivityIdentity?> GetInstanceAsync(string userId, string instanceId, CancellationToken ct)
     {
-        var settings = options.Value;
-        using var request = new HttpRequestMessage(HttpMethod.Get,
-            $"https://discord.com/api/v10/applications/{Uri.EscapeDataString(settings.DiscordClientId!)}/activity-instances/{Uri.EscapeDataString(instanceId)}");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bot", settings.DiscordBotToken);
-        using var response = await http.SendAsync(request, ct);
-        if (!response.IsSuccessStatusCode) return null;
-        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
-        var root = json.RootElement;
-        if (root.GetProperty("application_id").GetString() != settings.DiscordClientId
-            || root.GetProperty("instance_id").GetString() != instanceId
-            || !root.GetProperty("users").EnumerateArray().Any(x => x.GetString() == userId)) return null;
-        var location = root.GetProperty("location");
-        if (location.GetProperty("kind").GetString() != "gc") return null;
-        return new(userId, instanceId, location.GetProperty("guild_id").GetString()!, location.GetProperty("channel_id").GetString()!);
+        var snapshot = await instances.GetAsync(instanceId, ct);
+        return snapshot is not null && snapshot.Users.Contains(userId)
+            ? new(userId, instanceId, snapshot.GuildId, snapshot.ChannelId) : null;
+    }
+}
+
+/// <summary>One coalesced REST request per instance per five seconds, including negative responses.</summary>
+public sealed class DiscordActivityInstanceCache(IHttpClientFactory clients,
+    Microsoft.Extensions.Options.IOptions<RelayLaunchOptions> options, TimeProvider time)
+{
+    public sealed record Snapshot(string GuildId, string ChannelId, HashSet<string> Users);
+    private sealed class Entry
+    {
+        public readonly SemaphoreSlim Gate = new(1);
+        public Snapshot? Value;
+        public DateTimeOffset Until;
+    }
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Entry> _entries = new();
+    public async Task<Snapshot?> GetAsync(string instanceId, CancellationToken ct)
+    {
+        if (instanceId is not { Length: > 0 and <= 256 }) return null;
+        foreach (var old in _entries.Where(x => x.Value.Until != default && x.Value.Gate.CurrentCount == 1 && x.Value.Until < time.GetUtcNow().AddMinutes(-1)))
+            _entries.TryRemove(old);
+        var entry = _entries.GetOrAdd(instanceId, _ => new Entry());
+        await entry.Gate.WaitAsync(ct);
+        try
+        {
+            if (entry.Until > time.GetUtcNow()) return entry.Value;
+            entry.Value = null;
+            try
+            {
+                var settings = options.Value;
+                if (!string.IsNullOrWhiteSpace(settings.DiscordClientId) && !string.IsNullOrWhiteSpace(settings.DiscordBotToken))
+                {
+                    using var request = new HttpRequestMessage(HttpMethod.Get,
+                        $"https://discord.com/api/v10/applications/{Uri.EscapeDataString(settings.DiscordClientId)}/activity-instances/{Uri.EscapeDataString(instanceId)}");
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bot", settings.DiscordBotToken);
+                    using var response = await clients.CreateClient("DiscordActivityInstances").SendAsync(request, ct);
+                    if (response.IsSuccessStatusCode)
+                    {
+                        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+                        var root = json.RootElement;
+                        var location = root.GetProperty("location");
+                        if (root.GetProperty("application_id").GetString() == settings.DiscordClientId && root.GetProperty("instance_id").GetString() == instanceId && location.GetProperty("kind").GetString() == "gc")
+                            entry.Value = new(location.GetProperty("guild_id").GetString()!, location.GetProperty("channel_id").GetString()!,
+                                root.GetProperty("users").EnumerateArray().Select(x => x.GetString()!).ToHashSet());
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is HttpRequestException or JsonException or KeyNotFoundException or InvalidOperationException or TaskCanceledException) { entry.Value = null; }
+            entry.Until = time.GetUtcNow().AddSeconds(5);
+            return entry.Value;
+        }
+        finally { entry.Gate.Release(); }
     }
 }
 

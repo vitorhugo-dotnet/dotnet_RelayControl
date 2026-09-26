@@ -90,6 +90,8 @@ builder.Services.AddScoped<IAuthorizationHandler, DeviceScopeAuthorizationHandle
 builder.Services.Configure<RelayLaunchOptions>(builder.Configuration.GetSection("RelayLaunch"));
 builder.Services.AddHostedService<LaunchCapabilityCleanupService>();
 builder.Services.AddHttpClient<IDiscordActivityValidator, DiscordActivityValidator>(client => client.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddHttpClient("DiscordActivityInstances", client => client.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddSingleton<DiscordActivityInstanceCache>();
 
 builder.Services.AddAuthentication("DeviceBearer")
     .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, ActivityAuthenticationHandler>("Activity", _ => { })

@@ -3,7 +3,7 @@
 Configure `RelayLaunch:ServiceToken` (a separate high entropy bot-only bearer), `PublicBaseUrl`
 (public HTTPS API origin), `DownloadUrl`, `DiscordClientId`, `DiscordClientSecret`,
 `DiscordBotToken` and optional `DiscordRedirectUri`. Keep both Discord secrets API-side.
-Apply `AddLaunchCapabilities` before enabling bot routes. Existing device session routes remain
+Apply `AddLaunchCapabilities` and `EnforceActivityInstanceBinding` before enabling bot routes. Existing device session routes remain
 DeviceBearer authenticated. Bot credentials cannot create/join sessions.
 
 All bot operations use `Authorization: Bearer <RelayLaunch:ServiceToken>`:
@@ -11,7 +11,7 @@ All bot operations use `Authorization: Bearer <RelayLaunch:ServiceToken>`:
 | Request | Body / query | Response |
 |---|---|---|
 | POST /api/launch-intents/share | `{provider:"discord",guildId,channelId,requestedByUserId,ttlSeconds}` | `{id,launchUrl,expiresAt}` |
-| GET /api/launch-intents/pending | none | `{items:[{id,guildId,channelId,requestedByUserId,status,expiresAt}]}` |
+| GET /api/launch-intents/pending | none | `[{id,guildId,channelId,requestedByUserId,status,expiresAt}]` |
 | GET /api/launch-intents/{id} | `watchTtlSeconds` optional | `{id,status,sessionId,watchLaunchUrl,expiresAt}` |
 | POST /api/launch-intents/{id}/published | `{messageId?}` | 204 |
 | POST /api/launch-intents/watch | `{code,ttlSeconds}` | `{launchUrl,expiresAt}` |
@@ -40,6 +40,11 @@ The Activity SDK authorizes with `identify`. It submits its authorization code a
    then bot-authenticated `GET /applications/{application.id}/activity-instances/{instance_id}`.
    Application, instance, current user membership, guild and channel must match. The invoking user
    binds the newest pending context intent once; later users may authenticate in that bound instance.
+   An instance can bind one active session. A new watch for a different session returns 409
+   `activity_instance_busy` while that session remains live, so it cannot silently show old media.
+   When the previous session ends or the binding expires, a new pending intent can replace it;
+   replacement expires all old instance/session credentials. A filtered unique database index,
+   instance lock and serializable transaction protect concurrent initial binding.
 2. `POST /api/discord/activity/viewer-grants` with identity bearer and no body → `{grant,expiresAt}`.
    Revalidates current Discord membership. Grant lasts 60 seconds and works once.
 3. `POST /api/discord/activity/viewer-grants/redeem {grant}` →
@@ -51,7 +56,10 @@ The Activity SDK authorizes with `identify`. It submits its authorization code a
 
 Bound instances and viewer signaling grants last 15 minutes; sockets close at credential expiry,
 session end or Activity disconnect, and expired unused viewer reservations are cleaned every 30s.
-Disconnected Activity viewers do not use the desktop reconnect grace period. Obtain a new grant
+Presence is checked during signaling admission and every five seconds thereafter using one
+coalesced Discord REST snapshot per instance every five seconds. A snapshot that omits users
+revokes their identity/grant/signaling credentials together; their sockets close and viewer slots
+are released. Discord lookup failure fails closed. Disconnected Activity viewers do not use the desktop reconnect grace period. Obtain a new grant
 to reconnect while the bound Activity authorization remains valid.
 
 Secrets must not be included in request body or header logging. Activity requires reachable HTTPS

@@ -27,6 +27,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(x => x.ConsumedAt).IsConcurrencyToken();
             entity.HasIndex(x => x.TokenHash).IsUnique();
             entity.HasIndex(x => x.ExpiresAt);
+            // One binding per Discord instance across API processes; viewer credentials may
+            // share the instance, so only bootstrap rows participate in this unique index.
+            entity.HasIndex(x => x.InstanceId).IsUnique()
+                .HasFilter("\"Kind\" = 'activity' AND \"InstanceId\" IS NOT NULL");
             entity.Property(x => x.Kind).HasMaxLength(32);
             entity.Property(x => x.TokenHash).HasMaxLength(64);
             entity.Property(x => x.InstanceId).HasMaxLength(256);

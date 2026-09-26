@@ -63,11 +63,10 @@ public static class LaunchIntentEndpoints
             db.LaunchCapabilities.Add(intent); await db.SaveChangesAsync(ct);
             return Results.Ok(new { intent.Id, intent.ExpiresAt });
         });
-        group.MapGet("/pending", async (AppDbContext db, TimeProvider time, CancellationToken ct) => Results.Ok(new
-        {
-            items = await db.LaunchCapabilities.Where(x => x.Kind == "share" && x.ExpiresAt > time.GetUtcNow() && x.MessageId == null)
+        group.MapGet("/pending", async (AppDbContext db, TimeProvider time, CancellationToken ct) => Results.Ok(
+            await db.LaunchCapabilities.Where(x => x.Kind == "share" && x.ExpiresAt > time.GetUtcNow() && x.MessageId == null)
                 .Select(x => new { x.Id, x.GuildId, x.ChannelId, requestedByUserId = x.UserId, status = x.SessionId == null ? "pending" : "ready", x.ExpiresAt }).ToListAsync(ct)
-        }));
+        ));
         group.MapGet("/{id:guid}", async (Guid id, int? watchTtlSeconds, AppDbContext db, IOptions<RelayLaunchOptions> options, TimeProvider time, CancellationToken ct) =>
         {
             var intent = await db.LaunchCapabilities.SingleOrDefaultAsync(x => x.Id == id && x.Kind == "share" && x.ExpiresAt > time.GetUtcNow(), ct);
