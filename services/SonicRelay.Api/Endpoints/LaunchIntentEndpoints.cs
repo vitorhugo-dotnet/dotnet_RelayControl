@@ -65,7 +65,7 @@ public static class LaunchIntentEndpoints
         });
         group.MapGet("/pending", async (AppDbContext db, TimeProvider time, CancellationToken ct) => Results.Ok(
             await db.LaunchCapabilities.Where(x => x.Kind == "share" && x.ExpiresAt > time.GetUtcNow() && x.MessageId == null)
-                .Select(x => new { x.Id, x.GuildId, x.ChannelId, requestedByUserId = x.UserId, status = x.SessionId == null ? "pending" : "ready", x.ExpiresAt }).ToListAsync(ct)
+                .Select(x => new { x.Id, x.GuildId, x.ChannelId, requestedByUserId = x.UserId, status = x.SessionId == null ? "pending" : "session_ready", x.ExpiresAt }).ToListAsync(ct)
         ));
         group.MapGet("/{id:guid}", async (Guid id, int? watchTtlSeconds, AppDbContext db, IOptions<RelayLaunchOptions> options, TimeProvider time, CancellationToken ct) =>
         {
@@ -85,7 +85,7 @@ public static class LaunchIntentEndpoints
                     watchLaunchUrl = Url(options.Value, token);
                 }
             }
-            return Results.Ok(new { intent.Id, status = intent.SessionId == null ? "pending" : "ready", intent.SessionId, watchLaunchUrl, intent.ExpiresAt });
+            return Results.Ok(new { intent.Id, status = intent.SessionId == null ? "pending" : "session_ready", intent.SessionId, watchLaunchUrl, intent.ExpiresAt });
         });
         group.MapPost("/{id:guid}/published", async (Guid id, PublishedRequest request, AppDbContext db, TimeProvider time, CancellationToken ct) =>
         {

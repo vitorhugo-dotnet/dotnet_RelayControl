@@ -17,7 +17,7 @@ All bot operations use `Authorization: Bearer <RelayLaunch:ServiceToken>`:
 | POST /api/launch-intents/watch | `{code,ttlSeconds}` | `{launchUrl,expiresAt}` |
 | POST /api/launch-intents/activity | `{code,guildId,channelId,requestedByUserId,ttlSeconds}` | `{id,expiresAt}` |
 
-TTL is clamped to 30–900 seconds. Share status is `pending` or `ready`. Capability tokens
+TTL is clamped to 30–900 seconds. Share status is `pending` or `session_ready`, matching the Go watcher contract. Capability tokens
 are 64 lowercase hex characters and only hashes are stored; Activity bootstrap tokens are
 retained exclusively server-side. Watch only admits live screen-share codes.
 
