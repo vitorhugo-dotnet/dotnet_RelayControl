@@ -71,6 +71,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: build
     if: needs.build.outputs.has_dotnet_project == 'true'
     permissions:
@@ -106,6 +107,9 @@ jobs:
               --configuration "${{ env.CONFIGURATION }}" \
               --no-restore \
               --logger "trx" \
+              --logger "console;verbosity=detailed" \
+              --blame-hang-timeout 7m \
+              --blame-hang-dump-type mini \
               --results-directory TestResults
           done
 
@@ -115,7 +119,7 @@ jobs:
         with:
           name: test-results
           path: TestResults
-          if-no-files-found: ignore
+          if-no-files-found: warn
 
   publish_image:
     name: Publish public GHCR image

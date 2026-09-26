@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using SonicRelay.Infrastructure.Persistence;
@@ -11,9 +12,11 @@ using SonicRelay.Infrastructure.Persistence;
 namespace SonicRelay.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260924160103_AddLaunchIntents")]
+    partial class AddLaunchIntents
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -305,77 +308,6 @@ namespace SonicRelay.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("ix_relay_device_settings_created_at");
 
                     b.ToTable("relay_device_settings", (string)null);
-                });
-
-            modelBuilder.Entity("SonicRelay.Domain.Sessions.LaunchCapability", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("ChannelId")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Code")
-                        .HasColumnType("text");
-
-                    b.Property<DateTimeOffset?>("ConsumedAt")
-                        .IsConcurrencyToken()
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("DeviceId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("GuildId")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("InstanceId")
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<string>("Kind")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<string>("MessageId")
-                        .HasColumnType("text");
-
-                    b.Property<Guid?>("ParticipantId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid?>("SessionId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("TokenHash")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<string>("UserId")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ExpiresAt");
-
-                    b.HasIndex("InstanceId")
-                        .IsUnique()
-                        .HasFilter("\"Kind\" = 'activity' AND \"InstanceId\" IS NOT NULL");
-
-                    b.HasIndex("TokenHash")
-                        .IsUnique();
-
-                    b.ToTable("launch_capabilities", (string)null);
                 });
 
             modelBuilder.Entity("SonicRelay.Domain.Sessions.SessionParticipant", b =>

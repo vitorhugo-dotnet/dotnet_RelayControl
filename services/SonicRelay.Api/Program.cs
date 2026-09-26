@@ -1,5 +1,6 @@
 using System.Text;
 using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -21,6 +22,9 @@ var builder = WebApplication.CreateBuilder(args);
 // SQL at Warning+ so app logs (SonicRelay.*, request diagnostics) stay readable.
 // Overridable via Logging:LogLevel configuration if full SQL is ever needed.
 builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);
+// Launch capability is carried in the public landing route. Suppress ASP.NET's
+// request-start path logging so one-time credentials do not enter application logs.
+builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
 
 builder.Services.AddEndpointsApiExplorer();
 // Name the document explicitly: unconfigured, Swashbuckle titles the Swagger UI
@@ -79,43 +83,88 @@ builder.Services.PostConfigure<TurnOptions>(options =>
         options.CredentialTtlSeconds = ttl;
     }
 });
+// CORS exists for exactly one client: the Flutter viewer's web build, whose calls are
+// all cross-origin. Native clients never send an Origin header and are untouched by
+// this. Credentials are deliberately not allowed — the viewer authenticates with a
+// bearer token in a header, never with a cookie, so nothing here needs to be
+// credentialed, and `AllowAnyOrigin` stays off so the allowlist keeps meaning something.
+var corsOptions = builder.Configuration.GetSection(WebClientCorsOptions.SectionName).Get<WebClientCorsOptions>()
+    ?? new WebClientCorsOptions();
+builder.Services.Configure<WebClientCorsOptions>(builder.Configuration.GetSection(WebClientCorsOptions.SectionName));
+builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
+{
+    var allowedOrigins = corsOptions.EffectiveAllowedOrigins;
+    if (corsOptions.ResolveAllowLoopbackOrigins(builder.Environment.IsProduction()))
+    {
+        // `flutter run -d chrome` binds a new random port every launch, so local
+        // development cannot be covered by a fixed list of origins.
+        policy.SetIsOriginAllowed(origin =>
+            allowedOrigins.Contains(origin, StringComparer.Ordinal)
+            || WebClientCorsOptions.IsLoopbackOrigin(origin));
+    }
+    else
+    {
+        policy.WithOrigins([.. allowedOrigins]);
+    }
+
+    policy
+        .AllowAnyMethod()
+        .AllowAnyHeader()
+        // Without this the browser hides Retry-After from the viewer, and a rate-limited
+        // device setup cannot tell the user when to try again.
+        .WithExposedHeaders("Retry-After")
+        .SetPreflightMaxAge(TimeSpan.FromSeconds(corsOptions.PreflightMaxAgeSeconds));
+}));
 builder.Services.Configure<DeviceIdentityOptions>(builder.Configuration.GetSection("DeviceIdentity"));
+builder.Services.Configure<LaunchIntentOptions>(builder.Configuration.GetSection(LaunchIntentOptions.SectionName));
+builder.Services.Configure<RelayLaunchOptions>(builder.Configuration.GetSection("RelayLaunch"));
+builder.Services.AddCors(options => options.AddPolicy(SignalingGrantEndpoints.CorsPolicyName, policy =>
+    policy.WithOrigins([.. corsOptions.EffectiveAllowedOrigins])
+        .WithHeaders("Authorization", "Content-Type")
+        .WithMethods(HttpMethods.Post)
+        .AllowCredentials()));
 builder.Services.Configure<PublicRoomOptions>(builder.Configuration.GetSection(PublicRoomOptions.SectionName));
 builder.Services.AddSingleton<PublicRoomSeeder>();
 builder.Services.AddSingleton<PublicRoomPublisherService>();
 builder.Services.AddSingleton<IHostedService>(services => services.GetRequiredService<PublicRoomPublisherService>());
-builder.Services.AddSingleton<DeviceCredentialService>();
-builder.Services.AddSingleton<PairingChallengeService>();
-builder.Services.AddScoped<IAuthorizationHandler, DeviceScopeAuthorizationHandler>();
-builder.Services.Configure<RelayLaunchOptions>(builder.Configuration.GetSection("RelayLaunch"));
 builder.Services.AddHostedService<LaunchCapabilityCleanupService>();
 builder.Services.AddHttpClient<IDiscordActivityValidator, DiscordActivityValidator>(client => client.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddHttpClient("DiscordActivityInstances", client => client.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<DiscordActivityInstanceCache>();
+builder.Services.AddSingleton<DeviceCredentialService>();
+builder.Services.AddScoped<LaunchIntentService>();
+builder.Services.AddSingleton<SignalingGrantService>();
+builder.Services.AddSingleton<PairingChallengeService>();
+builder.Services.AddScoped<IAuthorizationHandler, DeviceScopeAuthorizationHandler>();
+builder.Services.AddScoped<IAuthorizationHandler, SignalingGrantAuthorizationHandler>();
 
-builder.Services.AddAuthentication("DeviceBearer")
-    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, ActivityAuthenticationHandler>("Activity", _ => { })
+builder.Services.AddAuthentication(options => options.DefaultForbidScheme = "DeviceBearer")
     .AddJwtBearer("DeviceBearer", jwtOptions =>
-{
-    // Keep claim types as issued (e.g. "sub", not ClaimTypes.NameIdentifier) so
-    // downstream code reading JwtRegisteredClaimNames.Sub/"cv"/"scope" matches
-    // what DeviceCredentialService.IssueAccessToken actually put in the token.
-    jwtOptions.MapInboundClaims = false;
-    var deviceOptions = builder.Configuration.GetSection("DeviceIdentity").Get<DeviceIdentityOptions>()
-        ?? new DeviceIdentityOptions();
-    jwtOptions.TokenValidationParameters = new TokenValidationParameters
     {
-        ValidIssuer = deviceOptions.Issuer,
-        ValidAudience = deviceOptions.Audience,
-        IssuerSigningKey = new SymmetricSecurityKey(
-            Encoding.UTF8.GetBytes(deviceOptions.TokenSigningKey ?? string.Empty)),
-        ValidateIssuer = true,
-        ValidateAudience = true,
-        ValidateLifetime = true,
-        ValidateIssuerSigningKey = true,
-        ClockSkew = TimeSpan.FromSeconds(30)
-    };
-});
+        // Keep claim types as issued (e.g. "sub", not ClaimTypes.NameIdentifier) so
+        // downstream code reading JwtRegisteredClaimNames.Sub/"cv"/"scope" matches
+        // what DeviceCredentialService.IssueAccessToken actually put in the token.
+        jwtOptions.MapInboundClaims = false;
+        var deviceOptions = builder.Configuration.GetSection("DeviceIdentity").Get<DeviceIdentityOptions>()
+            ?? new DeviceIdentityOptions();
+        jwtOptions.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidIssuer = deviceOptions.Issuer,
+            ValidAudience = deviceOptions.Audience,
+            IssuerSigningKey = new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(deviceOptions.TokenSigningKey ?? string.Empty)),
+            ValidateIssuer = true,
+            ValidateAudience = true,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ClockSkew = TimeSpan.FromSeconds(30)
+        };
+    })
+    .AddScheme<AuthenticationSchemeOptions, SignalingGrantAuthenticationHandler>(
+        SignalingGrantAuthenticationHandler.SchemeName, _ => { })
+    .AddScheme<AuthenticationSchemeOptions, LaunchServiceAuthenticationHandler>(
+        LaunchServiceAuthenticationHandler.SchemeName, _ => { })
+    .AddScheme<AuthenticationSchemeOptions, ActivityAuthenticationHandler>("Activity", _ => { });
 
 builder.Services.AddSingleton<SessionCleanupService>();
 builder.Services.AddSingleton<IHostedService>(services => services.GetRequiredService<SessionCleanupService>());
@@ -179,16 +228,28 @@ builder.Services.AddAuthorization(options =>
         policy.Requirements.Add(new DeviceScopeRequirement());
     });
 
+    options.AddPolicy("signaling:connect", policy =>
+    {
+        policy.AddAuthenticationSchemes("DeviceBearer", SignalingGrantAuthenticationHandler.SchemeName, "Activity");
+        policy.RequireAuthenticatedUser();
+        policy.Requirements.Add(new DeviceScopeRequirement("signaling:connect"));
+    });
+
+    options.AddPolicy("launch-intents:bot", policy =>
+    {
+        policy.AddAuthenticationSchemes(LaunchServiceAuthenticationHandler.SchemeName);
+        policy.RequireAuthenticatedUser();
+        policy.RequireClaim("scope", "launch-intents");
+    });
     foreach (var scope in new[]
     {
-        "session:create", "session:join", "session:end", "signaling:connect", "turn:credentials",
+        "session:create", "session:join", "session:end", "turn:credentials",
         "device:read", "device:manage", "pairing:create", "pairing:complete", "pairing:revoke"
     })
     {
         options.AddPolicy(scope, policy =>
         {
             policy.AddAuthenticationSchemes("DeviceBearer");
-            if (scope == "signaling:connect") policy.AddAuthenticationSchemes("Activity");
             policy.RequireAuthenticatedUser();
             policy.Requirements.Add(new DeviceScopeRequirement(scope));
         });
@@ -223,6 +284,10 @@ if (app.Configuration.GetValue("Swagger:Enabled", app.Environment.IsDevelopment(
 }
 
 app.UseWebSockets();
+// Ahead of authentication and the rate limiter on purpose: a preflight carries neither
+// credentials nor a body, so letting it reach either would 401 the browser's own probe
+// or spend the caller's device-bootstrap budget before the real request arrives.
+app.UseCors();
 app.UseAuthentication();
 app.UseRateLimiter();
 app.UseAuthorization();
@@ -235,12 +300,14 @@ app.MapMetrics();
 app.MapDeviceIdentityEndpoints();
 app.MapPairingEndpoints();
 app.MapSessionEndpoints();
+app.MapLaunchIntentEndpoints();
+app.MapDiscordActivityLaunchIntentEndpoints();
+app.MapDiscordActivityEndpoints();
 app.MapWebRtcEndpoints();
 app.MapSettingsEndpoints();
+app.MapSignalingGrantEndpoints();
 app.MapSignalingWebSocketEndpoint();
 app.MapPublicRoomEndpoints();
-app.MapLaunchIntentEndpoints();
-app.MapDiscordActivityEndpoints();
 
 app.Run();
 

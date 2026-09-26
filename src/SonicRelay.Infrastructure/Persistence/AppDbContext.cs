@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using SonicRelay.Domain.DeviceIdentities;
+using SonicRelay.Domain.LaunchIntents;
 using SonicRelay.Domain.RelaySettings;
 using SonicRelay.Domain.Sessions;
 using SonicRelay.Domain.Signaling;
@@ -16,6 +17,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<PairingChallenge> PairingChallenges => Set<PairingChallenge>();
     public DbSet<DevicePairing> DevicePairings => Set<DevicePairing>();
     public DbSet<RelayDeviceSettings> RelayDeviceSettings => Set<RelayDeviceSettings>();
+    public DbSet<ShareLaunchIntent> ShareLaunchIntents => Set<ShareLaunchIntent>();
+    public DbSet<WatchLaunchCapability> WatchLaunchCapabilities => Set<WatchLaunchCapability>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -125,6 +128,31 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(x => x.TurnUsername).HasMaxLength(256);
             entity.Property(x => x.TurnCredential).HasMaxLength(256);
             entity.HasIndex(x => x.CreatedAt).HasDatabaseName("ix_relay_device_settings_created_at");
+        });
+
+        modelBuilder.Entity<ShareLaunchIntent>(entity =>
+        {
+            entity.ToTable("share_launch_intents");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.TokenHash).HasMaxLength(64).IsRequired();
+            entity.HasIndex(x => x.TokenHash).IsUnique().HasDatabaseName("ux_share_launch_intents_token_hash");
+            entity.Property(x => x.Provider).HasMaxLength(32).IsRequired();
+            entity.Property(x => x.GuildId).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.ChannelId).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.RequestedByUserId).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.Status).HasMaxLength(24).IsRequired();
+            entity.Property(x => x.Version).IsConcurrencyToken();
+            entity.HasIndex(x => new { x.Status, x.ExpiresAt }).HasDatabaseName("ix_share_launch_intents_status_expires_at");
+            entity.HasIndex(x => x.CreatedAt).HasDatabaseName("ix_share_launch_intents_created_at");
+        });
+
+        modelBuilder.Entity<WatchLaunchCapability>(entity =>
+        {
+            entity.ToTable("watch_launch_capabilities");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.TokenHash).HasMaxLength(64).IsRequired();
+            entity.HasIndex(x => x.TokenHash).IsUnique().HasDatabaseName("ux_watch_launch_capabilities_token_hash");
+            entity.HasIndex(x => new { x.SessionId, x.ExpiresAt }).HasDatabaseName("ix_watch_launch_capabilities_session_expires_at");
         });
     }
 }

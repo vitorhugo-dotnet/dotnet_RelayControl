@@ -43,6 +43,8 @@ public sealed class SonicRelayApiFactory : WebApplicationFactory<Program>
         builder.UseSetting("DeviceIdentity:CredentialHmacKey", "integration-test-device-credential-key");
         builder.UseSetting("DeviceIdentity:PairingCodeHmacKey", "integration-test-pairing-code-key");
         builder.UseSetting("DeviceIdentity:TokenSigningKey", "integration-test-device-token-signing-key-32bytes-min");
+        builder.UseSetting("LaunchIntents:ServiceToken", "integration-test-discord-service-token");
+        builder.UseSetting("LaunchIntents:PublicBaseUrl", "https://framerelay.hugojava.dev");
         builder.UseSetting("RateLimits:DeviceBootstrap:PermitLimit", "100");
         builder.UseSetting("RateLimits:DeviceToken:PermitLimit", "100");
         builder.UseSetting("RateLimits:PairingCreate:PermitLimit", "100");

@@ -59,4 +59,42 @@ public sealed class DeviceBootstrapAndTokenTests : IClassFixture<SonicRelayApiFa
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
+
+    /// <summary>
+    /// The Flutter viewer's web build reports <c>platform: "web"</c>, which the
+    /// type/platform table used to reject: the browser viewer bootstrapped straight
+    /// into "Unable to prepare this device" while the same build on a phone worked.
+    /// </summary>
+    [Fact]
+    public async Task Bootstrap_Accepts_The_FlutterViewer_Web_Build()
+    {
+        var response = await _client.PostAsJsonAsync("/api/devices/bootstrap",
+            new BootstrapDeviceRequest("Chrome on Windows", "flutter_viewer", "web"));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var bootstrap = await response.Content.ReadFromJsonAsync<BootstrapDeviceResponse>();
+        Assert.NotNull(bootstrap);
+
+        var tokenResponse = await _client.PostAsJsonAsync("/api/devices/token",
+            new DeviceTokenRequest(bootstrap!.DeviceId, bootstrap.CredentialSecret));
+
+        Assert.Equal(HttpStatusCode.OK, tokenResponse.StatusCode);
+        var token = await tokenResponse.Content.ReadFromJsonAsync<DeviceTokenResponse>();
+        Assert.Contains("session:join", token!.Scopes);
+    }
+
+    /// <summary>
+    /// "web" is a viewer platform only — nothing captures audio or a screen from a
+    /// browser tab, so a publisher claiming it is still a bad combination.
+    /// </summary>
+    [Theory]
+    [InlineData("windows_publisher")]
+    [InlineData("windows_desktop")]
+    public async Task Bootstrap_Rejects_Web_For_Publisher_Types(string deviceType)
+    {
+        var response = await _client.PostAsJsonAsync("/api/devices/bootstrap",
+            new BootstrapDeviceRequest("Bad", deviceType, "web"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
 }
