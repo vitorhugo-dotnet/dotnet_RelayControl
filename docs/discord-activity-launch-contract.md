@@ -21,6 +21,14 @@ TTL is clamped to 30–900 seconds. Share status is `pending` or `ready`. Capabi
 are 64 lowercase hex characters and only hashes are stored; Activity bootstrap tokens are
 retained exclusively server-side. Watch only admits live screen-share codes.
 
+`GET /api/launch-intents/{id}?watchTtlSeconds=0` opts out of creating a watch capability:
+it returns the existing ready/status/session fields and `watchLaunchUrl: null`. Omitted TTL
+still creates a 300-second watch capability; positive TTL keeps the normal clamped behavior.
+The bot uses zero during polling because a public ready announcement cannot share a
+single-use capability among participants. Each participant runs `/framerelay watch <code>`
+to obtain an individual Activity intent and individual desktop fallback, so status polling
+does not create unused credentials.
+
 Public URLs are `/open/launch#<token>`: the fragment is absent from HTTP access logs. The landing
 page clears it from history and opens `framerelay://launch?token=<token>`, and shows the configured
 download/help link. The operating system cannot reliably report whether a protocol handler is

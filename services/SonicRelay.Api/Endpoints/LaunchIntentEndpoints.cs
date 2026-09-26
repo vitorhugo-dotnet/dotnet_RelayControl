@@ -76,11 +76,14 @@ public static class LaunchIntentEndpoints
             {
                 var session = await db.StreamSessions.FindAsync([sessionId], ct);
                 if (session is null || session.Status is SessionStatuses.Ended or SessionStatuses.Expired) return Results.NotFound();
-                var token = RelayCapability.NewToken();
-                var watch = RelayCapability.Create("watch", token, time.GetUtcNow(), watchTtlSeconds ?? 300);
-                watch.SessionId = sessionId;
-                db.LaunchCapabilities.Add(watch); await db.SaveChangesAsync(ct);
-                watchLaunchUrl = Url(options.Value, token);
+                if (watchTtlSeconds != 0)
+                {
+                    var token = RelayCapability.NewToken();
+                    var watch = RelayCapability.Create("watch", token, time.GetUtcNow(), watchTtlSeconds ?? 300);
+                    watch.SessionId = sessionId;
+                    db.LaunchCapabilities.Add(watch); await db.SaveChangesAsync(ct);
+                    watchLaunchUrl = Url(options.Value, token);
+                }
             }
             return Results.Ok(new { intent.Id, status = intent.SessionId == null ? "pending" : "ready", intent.SessionId, watchLaunchUrl, intent.ExpiresAt });
         });

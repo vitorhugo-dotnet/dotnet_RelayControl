@@ -81,7 +81,20 @@ public sealed class LaunchIntentActivityTests
         var id = intent.GetProperty("id").GetGuid();
         Assert.Equal(HttpStatusCode.NotFound, (await other.PostAsJsonAsync($"/api/launch-intents/{id}/bind", new { sessionId = session.GetProperty("id").GetGuid() })).StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, (await host.PostAsJsonAsync($"/api/launch-intents/{id}/bind", new { sessionId = session.GetProperty("id").GetGuid() })).StatusCode);
-        var ready = await Json(await bot.GetAsync($"/api/launch-intents/{id}?watchTtlSeconds=60")); Assert.Equal("ready", ready.GetProperty("status").GetString());
+        using var scope = factory.Services.CreateScope(); var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var before = await db.LaunchCapabilities.CountAsync();
+        var polling = await Json(await bot.GetAsync($"/api/launch-intents/{id}?watchTtlSeconds=0"));
+        Assert.Equal("ready", polling.GetProperty("status").GetString());
+        Assert.Equal(session.GetProperty("id").GetGuid(), polling.GetProperty("sessionId").GetGuid());
+        Assert.Equal(JsonValueKind.Null, polling.GetProperty("watchLaunchUrl").ValueKind);
+        Assert.Equal(before, await db.LaunchCapabilities.CountAsync());
+        var ready = await Json(await bot.GetAsync($"/api/launch-intents/{id}?watchTtlSeconds=60"));
+        Assert.Equal("ready", ready.GetProperty("status").GetString());
+        Assert.Equal(before + 1, await db.LaunchCapabilities.CountAsync());
+        Assert.Equal(JsonValueKind.String, ready.GetProperty("watchLaunchUrl").ValueKind);
+        var defaultWatch = await Json(await bot.GetAsync($"/api/launch-intents/{id}"));
+        Assert.Equal(JsonValueKind.String, defaultWatch.GetProperty("watchLaunchUrl").ValueKind);
+        Assert.Equal(before + 2, await db.LaunchCapabilities.CountAsync());
     }
 
     [Fact]
