@@ -117,6 +117,7 @@ builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
 }));
 builder.Services.Configure<DeviceIdentityOptions>(builder.Configuration.GetSection("DeviceIdentity"));
 builder.Services.Configure<LaunchIntentOptions>(builder.Configuration.GetSection(LaunchIntentOptions.SectionName));
+builder.Services.Configure<RelayLaunchOptions>(builder.Configuration.GetSection("RelayLaunch"));
 builder.Services.AddCors(options => options.AddPolicy(SignalingGrantEndpoints.CorsPolicyName, policy =>
     policy.WithOrigins([.. corsOptions.EffectiveAllowedOrigins])
         .WithHeaders("Authorization", "Content-Type")
@@ -126,6 +127,10 @@ builder.Services.Configure<PublicRoomOptions>(builder.Configuration.GetSection(P
 builder.Services.AddSingleton<PublicRoomSeeder>();
 builder.Services.AddSingleton<PublicRoomPublisherService>();
 builder.Services.AddSingleton<IHostedService>(services => services.GetRequiredService<PublicRoomPublisherService>());
+builder.Services.AddHostedService<LaunchCapabilityCleanupService>();
+builder.Services.AddHttpClient<IDiscordActivityValidator, DiscordActivityValidator>(client => client.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddHttpClient("DiscordActivityInstances", client => client.Timeout = TimeSpan.FromSeconds(10));
+builder.Services.AddSingleton<DiscordActivityInstanceCache>();
 builder.Services.AddSingleton<DeviceCredentialService>();
 builder.Services.AddScoped<LaunchIntentService>();
 builder.Services.AddSingleton<SignalingGrantService>();
@@ -158,7 +163,8 @@ builder.Services.AddAuthentication(options => options.DefaultForbidScheme = "Dev
     .AddScheme<AuthenticationSchemeOptions, SignalingGrantAuthenticationHandler>(
         SignalingGrantAuthenticationHandler.SchemeName, _ => { })
     .AddScheme<AuthenticationSchemeOptions, LaunchServiceAuthenticationHandler>(
-        LaunchServiceAuthenticationHandler.SchemeName, _ => { });
+        LaunchServiceAuthenticationHandler.SchemeName, _ => { })
+    .AddScheme<AuthenticationSchemeOptions, ActivityAuthenticationHandler>("Activity", _ => { });
 
 builder.Services.AddSingleton<SessionCleanupService>();
 builder.Services.AddSingleton<IHostedService>(services => services.GetRequiredService<SessionCleanupService>());
@@ -224,7 +230,7 @@ builder.Services.AddAuthorization(options =>
 
     options.AddPolicy("signaling:connect", policy =>
     {
-        policy.AddAuthenticationSchemes("DeviceBearer", SignalingGrantAuthenticationHandler.SchemeName);
+        policy.AddAuthenticationSchemes("DeviceBearer", SignalingGrantAuthenticationHandler.SchemeName, "Activity");
         policy.RequireAuthenticatedUser();
         policy.Requirements.Add(new DeviceScopeRequirement("signaling:connect"));
     });
@@ -295,6 +301,8 @@ app.MapDeviceIdentityEndpoints();
 app.MapPairingEndpoints();
 app.MapSessionEndpoints();
 app.MapLaunchIntentEndpoints();
+app.MapDiscordActivityLaunchIntentEndpoints();
+app.MapDiscordActivityEndpoints();
 app.MapWebRtcEndpoints();
 app.MapSettingsEndpoints();
 app.MapSignalingGrantEndpoints();

@@ -274,13 +274,20 @@ public static class SessionEndpoints
         // duplicate row eats a viewer slot and splits signaling routing across two participant
         // ids. The unique index on (SessionId, DeviceId, Role) is the cross-instance backstop;
         // this lock keeps the single-instance case off the constraint-violation path entirely.
-        using var admission = await admissionLock.AcquireAsync(session.Id, device.Id, ct);
+        // Activity and desktop admissions share the session gate so neither can consume the
+        // last viewer slot while the other is checking it.
+        using var admission = await admissionLock.AcquireAsync(session.Id, Guid.Empty, ct);
+        await using var transaction = session.Mode == SessionModes.ScreenShare && db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct) : null;
         try
         {
-            return await AdmitViewerCoreAsync(session, device, db, loggerFactory, metrics, ct);
+            var result = await AdmitViewerCoreAsync(session, device, db, loggerFactory, metrics, ct);
+            if (transaction is not null) await transaction.CommitAsync(ct);
+            return result;
         }
         catch (DbUpdateException)
         {
+            if (transaction is not null) await transaction.RollbackAsync(ct);
             // Another API instance won the insert. Its row is the participant now; adopt it
             // rather than reporting a failure the client could only answer by retrying.
             db.ChangeTracker.Clear();

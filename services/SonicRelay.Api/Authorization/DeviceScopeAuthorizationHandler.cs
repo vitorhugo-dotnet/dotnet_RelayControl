@@ -12,6 +12,11 @@ public sealed class DeviceScopeAuthorizationHandler(AppDbContext db) : Authoriza
     protected override async Task HandleRequirementAsync(
         AuthorizationHandlerContext context, DeviceScopeRequirement requirement)
     {
+        if (requirement.Scope == "signaling:connect" && context.User.Identities.Any(x => x.AuthenticationType == "Activity"))
+        {
+            context.Succeed(requirement);
+            return;
+        }
         if (requirement.Scope is not null)
         {
             var scopes = context.User.FindFirstValue("scope")?.Split(' ', StringSplitOptions.RemoveEmptyEntries)

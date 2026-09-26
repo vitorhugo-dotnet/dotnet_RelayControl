@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using SonicRelay.Infrastructure.Persistence;
@@ -11,9 +12,11 @@ using SonicRelay.Infrastructure.Persistence;
 namespace SonicRelay.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260926043350_AddLaunchCapabilities")]
+    partial class AddLaunchCapabilities
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -159,117 +162,6 @@ namespace SonicRelay.Infrastructure.Persistence.Migrations
                     b.ToTable("pairing_challenges", (string)null);
                 });
 
-            modelBuilder.Entity("SonicRelay.Domain.LaunchIntents.ShareLaunchIntent", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("ChannelId")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<DateTimeOffset?>("CompletedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset?>("ConsumedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("ConsumedByDeviceId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("GuildId")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<string>("Provider")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)");
-
-                    b.Property<DateTimeOffset?>("PublishedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("PublishedMessageId")
-                        .HasColumnType("text");
-
-                    b.Property<string>("RequestedByUserId")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<Guid?>("SessionId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasMaxLength(24)
-                        .HasColumnType("character varying(24)");
-
-                    b.Property<string>("TokenHash")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.Property<int>("Version")
-                        .IsConcurrencyToken()
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CreatedAt")
-                        .HasDatabaseName("ix_share_launch_intents_created_at");
-
-                    b.HasIndex("TokenHash")
-                        .IsUnique()
-                        .HasDatabaseName("ux_share_launch_intents_token_hash");
-
-                    b.HasIndex("Status", "ExpiresAt")
-                        .HasDatabaseName("ix_share_launch_intents_status_expires_at");
-
-                    b.ToTable("share_launch_intents", (string)null);
-                });
-
-            modelBuilder.Entity("SonicRelay.Domain.LaunchIntents.WatchLaunchCapability", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTimeOffset>("ExpiresAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("SessionId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("TokenHash")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("character varying(64)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("TokenHash")
-                        .IsUnique()
-                        .HasDatabaseName("ux_watch_launch_capabilities_token_hash");
-
-                    b.HasIndex("SessionId", "ExpiresAt")
-                        .HasDatabaseName("ix_watch_launch_capabilities_session_expires_at");
-
-                    b.ToTable("watch_launch_capabilities", (string)null);
-                });
-
             modelBuilder.Entity("SonicRelay.Domain.RelaySettings.RelayDeviceSettings", b =>
                 {
                     b.Property<Guid>("DeviceId")
@@ -367,10 +259,6 @@ namespace SonicRelay.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("ExpiresAt");
-
-                    b.HasIndex("InstanceId")
-                        .IsUnique()
-                        .HasFilter("\"Kind\" = 'activity' AND \"InstanceId\" IS NOT NULL");
 
                     b.HasIndex("TokenHash")
                         .IsUnique();
