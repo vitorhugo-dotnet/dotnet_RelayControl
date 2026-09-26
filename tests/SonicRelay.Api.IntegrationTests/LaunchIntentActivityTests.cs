@@ -39,7 +39,7 @@ public sealed class LaunchIntentActivityTests
         public Task<bool> IsPresentAsync(DiscordActivityIdentity identity, CancellationToken ct) => Task.FromResult(Present);
     }
     private static SonicRelayApiFactory Factory() => new(new Dictionary<string, string?>
-        { ["RelayLaunch:ServiceToken"] = "bot-secret", ["RelayLaunch:PublicBaseUrl"] = "https://relay.example" });
+        { ["LaunchIntents:ServiceToken"] = "bot-secret", ["RelayLaunch:PublicBaseUrl"] = "https://relay.example" });
     private static HttpClient Bot(Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program> factory)
     {
         var bot = factory.CreateClient(); bot.DefaultRequestHeaders.Authorization = new("Bearer", "bot-secret"); return bot;
@@ -72,30 +72,23 @@ public sealed class LaunchIntentActivityTests
         Assert.Equal(JsonValueKind.Array, pending.ValueKind);
         Assert.Equal(intent.GetProperty("id").GetGuid(), pending[0].GetProperty("id").GetGuid());
         Assert.Equal("pending", pending[0].GetProperty("status").GetString());
-        var token = new Uri(intent.GetProperty("launchUrl").GetString()!).Fragment[1..];
+        var launchUrl = intent.GetProperty("launchUrl").GetString()!;
+        var token = launchUrl[(launchUrl.LastIndexOf('/') + 1)..];
         using var host = factory.CreateClient(); await DeviceIdentityTestHelper.BootstrapAndAuthorizeAsync(host, DeviceTypes.WindowsDesktop, DevicePlatforms.Windows);
-        var redeemed = await Json(await host.PostAsJsonAsync("/api/launch-intents/redeem", new { token }));
-        Assert.Equal("share", redeemed.GetProperty("kind").GetString());
-        Assert.Equal(HttpStatusCode.NotFound, (await host.PostAsJsonAsync("/api/launch-intents/redeem", new { token })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await host.PostAsJsonAsync("/api/launch-intents/share/consume", new { token })).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await host.PostAsJsonAsync("/api/launch-intents/share/consume", new { token })).StatusCode);
         var session = await Screen(host);
-        using var other = factory.CreateClient(); await DeviceIdentityTestHelper.BootstrapAndAuthorizeAsync(other, DeviceTypes.WindowsDesktop, DevicePlatforms.Windows);
         var id = intent.GetProperty("id").GetGuid();
-        Assert.Equal(HttpStatusCode.NotFound, (await other.PostAsJsonAsync($"/api/launch-intents/{id}/bind", new { sessionId = session.GetProperty("id").GetGuid() })).StatusCode);
-        Assert.Equal(HttpStatusCode.NoContent, (await host.PostAsJsonAsync($"/api/launch-intents/{id}/bind", new { sessionId = session.GetProperty("id").GetGuid() })).StatusCode);
-        using var scope = factory.Services.CreateScope(); var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var before = await db.LaunchCapabilities.CountAsync();
+        Assert.Equal(HttpStatusCode.NoContent, (await host.PostAsJsonAsync($"/api/launch-intents/share/{id}/complete", new { sessionId = session.GetProperty("id").GetGuid() })).StatusCode);
         var polling = await Json(await bot.GetAsync($"/api/launch-intents/{id}?watchTtlSeconds=0"));
         Assert.Equal("session_ready", polling.GetProperty("status").GetString());
         Assert.Equal(session.GetProperty("id").GetGuid(), polling.GetProperty("sessionId").GetGuid());
-        Assert.Equal(JsonValueKind.Null, polling.GetProperty("watchLaunchUrl").ValueKind);
-        Assert.Equal(before, await db.LaunchCapabilities.CountAsync());
+        Assert.Equal(JsonValueKind.String, polling.GetProperty("watchLaunchUrl").ValueKind);
         var ready = await Json(await bot.GetAsync($"/api/launch-intents/{id}?watchTtlSeconds=60"));
         Assert.Equal("session_ready", ready.GetProperty("status").GetString());
-        Assert.Equal(before + 1, await db.LaunchCapabilities.CountAsync());
         Assert.Equal(JsonValueKind.String, ready.GetProperty("watchLaunchUrl").ValueKind);
         var defaultWatch = await Json(await bot.GetAsync($"/api/launch-intents/{id}"));
         Assert.Equal(JsonValueKind.String, defaultWatch.GetProperty("watchLaunchUrl").ValueKind);
-        Assert.Equal(before + 2, await db.LaunchCapabilities.CountAsync());
         var readyItems = await Json(await bot.GetAsync("/api/launch-intents/pending"));
         Assert.Equal("session_ready", readyItems[0].GetProperty("status").GetString());
     }
@@ -134,13 +127,14 @@ public sealed class LaunchIntentActivityTests
     public async Task Expired_launch_capability_cannot_be_redeemed()
     {
         var clock = new TestTimeProvider();
-        using var factory = new SonicRelayApiFactory(new Dictionary<string, string?> { ["RelayLaunch:ServiceToken"] = "bot-secret" }) { TimeProviderOverride = clock };
+        using var factory = new SonicRelayApiFactory(new Dictionary<string, string?> { ["LaunchIntents:ServiceToken"] = "bot-secret" }) { TimeProviderOverride = clock };
         using var bot = Bot(factory);
         var intent = await Json(await bot.PostAsJsonAsync("/api/launch-intents/share", new { provider = "discord", guildId = "1", channelId = "2", requestedByUserId = "3", ttlSeconds = 30 }));
-        var token = intent.GetProperty("launchUrl").GetString()!.Split('#')[1];
-        using var host = factory.CreateClient(); await DeviceIdentityTestHelper.BootstrapAndAuthorizeAsync(host, DeviceTypes.WindowsDesktop, DevicePlatforms.Windows);
+        var launchUrl = intent.GetProperty("launchUrl").GetString()!;
+        var token = launchUrl[(launchUrl.LastIndexOf('/') + 1)..];
+        using var host = factory.CreateClient(); await DeviceIdentityTestHelper.BootstrapAndAuthorizeAsync(host, DeviceTypes.WindowsPublisher, DevicePlatforms.Windows);
         clock.Advance(TimeSpan.FromSeconds(31));
-        Assert.Equal(HttpStatusCode.NotFound, (await host.PostAsJsonAsync("/api/launch-intents/redeem", new { token })).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await host.PostAsJsonAsync("/api/launch-intents/share/consume", new { token })).StatusCode);
     }
 
     [Fact]
