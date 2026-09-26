@@ -93,7 +93,11 @@ public static class SignalingWebSocketEndpoint
             return;
         }
 
-        using var socket = await context.WebSockets.AcceptWebSocketAsync();
+        using var activityExpiry = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
+        var activity = context.User.HasClaim(x => x.Type == "activity_session");
+        if (activity && long.TryParse(context.User.FindFirst("activity_expiry")?.Value, out var expiry))
+            activityExpiry.CancelAfter(TimeSpan.FromSeconds(Math.Max(0, expiry - DateTimeOffset.UtcNow.ToUnixTimeSeconds())));
+        using var socket = await context.WebSockets.AcceptWebSocketAsync(activity ? "framerelay" : null);
         using var socketSendLock = new SemaphoreSlim(1, 1);
         async Task SendFrameAsync(ReadOnlyMemory<byte> message, CancellationToken ct)
         {
@@ -140,14 +144,21 @@ public static class SignalingWebSocketEndpoint
                 CapabilitiesPayload(participant, session.Mode), context.RequestAborted);
             await SendPeerRosterAsync(SendFrameAsync, db, registry, session, participant.Id, context.RequestAborted);
             await ReceiveLoopAsync(socket, SendFrameAsync, session, participant.Id, db, registry, logger, metrics,
-                context.RequestAborted);
+                activityExpiry.Token);
         }
         finally
         {
             metrics.ConnectionClosed(sessionId);
             await registry.UnregisterAsync(connectionId, CancellationToken.None);
-            await HandleDisconnectAsync(db, registry, reconnectTracker, scopeFactory, configuration, logger,
-                sessionId, participant.Id, connectionId);
+            if (activity)
+            {
+                await FinalizeDisconnectAsync(db, participant.Id, connectionId);
+                await BroadcastAsync(registry, sessionId, participant.Id, "session.left", participant.Id,
+                    new { participantId = participant.Id }, CancellationToken.None);
+            }
+            else
+                await HandleDisconnectAsync(db, registry, reconnectTracker, scopeFactory, configuration, logger,
+                    sessionId, participant.Id, connectionId);
 
             if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
             {

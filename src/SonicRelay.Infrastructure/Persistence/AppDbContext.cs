@@ -9,6 +9,7 @@ namespace SonicRelay.Infrastructure.Persistence;
 public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options)
 {
     public DbSet<StreamSession> StreamSessions => Set<StreamSession>();
+    public DbSet<LaunchCapability> LaunchCapabilities => Set<LaunchCapability>();
     public DbSet<SessionParticipant> SessionParticipants => Set<SessionParticipant>();
     public DbSet<SignalingEvent> SignalingEvents => Set<SignalingEvent>();
     public DbSet<DeviceIdentity> DeviceIdentities => Set<DeviceIdentity>();
@@ -19,6 +20,17 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+        modelBuilder.Entity<LaunchCapability>(entity =>
+        {
+            entity.ToTable("launch_capabilities");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.ConsumedAt).IsConcurrencyToken();
+            entity.HasIndex(x => x.TokenHash).IsUnique();
+            entity.HasIndex(x => x.ExpiresAt);
+            entity.Property(x => x.Kind).HasMaxLength(32);
+            entity.Property(x => x.TokenHash).HasMaxLength(64);
+            entity.Property(x => x.InstanceId).HasMaxLength(256);
+        });
 
         modelBuilder.Entity<StreamSession>(entity =>
         {

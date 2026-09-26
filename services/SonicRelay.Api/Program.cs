@@ -87,8 +87,13 @@ builder.Services.AddSingleton<IHostedService>(services => services.GetRequiredSe
 builder.Services.AddSingleton<DeviceCredentialService>();
 builder.Services.AddSingleton<PairingChallengeService>();
 builder.Services.AddScoped<IAuthorizationHandler, DeviceScopeAuthorizationHandler>();
+builder.Services.Configure<RelayLaunchOptions>(builder.Configuration.GetSection("RelayLaunch"));
+builder.Services.AddHostedService<LaunchCapabilityCleanupService>();
+builder.Services.AddHttpClient<IDiscordActivityValidator, DiscordActivityValidator>(client => client.Timeout = TimeSpan.FromSeconds(10));
 
-builder.Services.AddAuthentication().AddJwtBearer("DeviceBearer", jwtOptions =>
+builder.Services.AddAuthentication("DeviceBearer")
+    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, ActivityAuthenticationHandler>("Activity", _ => { })
+    .AddJwtBearer("DeviceBearer", jwtOptions =>
 {
     // Keep claim types as issued (e.g. "sub", not ClaimTypes.NameIdentifier) so
     // downstream code reading JwtRegisteredClaimNames.Sub/"cv"/"scope" matches
@@ -181,6 +186,7 @@ builder.Services.AddAuthorization(options =>
         options.AddPolicy(scope, policy =>
         {
             policy.AddAuthenticationSchemes("DeviceBearer");
+            if (scope == "signaling:connect") policy.AddAuthenticationSchemes("Activity");
             policy.RequireAuthenticatedUser();
             policy.Requirements.Add(new DeviceScopeRequirement(scope));
         });
@@ -231,6 +237,8 @@ app.MapWebRtcEndpoints();
 app.MapSettingsEndpoints();
 app.MapSignalingWebSocketEndpoint();
 app.MapPublicRoomEndpoints();
+app.MapLaunchIntentEndpoints();
+app.MapDiscordActivityEndpoints();
 
 app.Run();
 
