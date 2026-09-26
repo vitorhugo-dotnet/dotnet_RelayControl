@@ -147,7 +147,11 @@ public static class SignalingWebSocketEndpoint
             }
         }
 
-        using var socket = await context.WebSockets.AcceptWebSocketAsync();
+        using var activityExpiry = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
+        var activity = context.User.HasClaim(x => x.Type == "activity_session");
+        if (activity && long.TryParse(context.User.FindFirst("activity_expiry")?.Value, out var expiry))
+            activityExpiry.CancelAfter(TimeSpan.FromSeconds(Math.Max(0, expiry - DateTimeOffset.UtcNow.ToUnixTimeSeconds())));
+        using var socket = await context.WebSockets.AcceptWebSocketAsync(activity ? "framerelay" : null);
         using var socketSendLock = new SemaphoreSlim(1, 1);
         async Task SendFrameAsync(ReadOnlyMemory<byte> message, CancellationToken ct)
         {
@@ -183,6 +187,14 @@ public static class SignalingWebSocketEndpoint
 
         try
         {
+            async Task<bool> ActivityPresentAsync()
+            {
+                if (!Guid.TryParse(context.User.FindFirst("activity_capability")?.Value, out var id)) return false;
+                var capability = await db.LaunchCapabilities.AsNoTracking().SingleOrDefaultAsync(x => x.Id == id, activityExpiry.Token);
+                return capability is not null && await ActivityPresenceService.IsAuthorizedAsync(db,
+                    context.RequestServices.GetRequiredService<IDiscordActivityValidator>(), capability,
+                    context.RequestServices.GetRequiredService<TimeProvider>().GetUtcNow(), activityExpiry.Token);
+            }
             // The join payload carries the participant's audio capabilities alongside the
             // long-standing participantId/role pair, so a client knows whether it may publish
             // audio (and what its peers may do) before any SDP is exchanged. Clients written
@@ -194,14 +206,21 @@ public static class SignalingWebSocketEndpoint
                 CapabilitiesPayload(participant, session.Mode), context.RequestAborted);
             await SendPeerRosterAsync(SendFrameAsync, db, registry, session, participant.Id, context.RequestAborted);
             await ReceiveLoopAsync(socket, SendFrameAsync, session, participant.Id, db, registry, logger, metrics,
-                context.RequestAborted);
+                activityExpiry.Token, activity ? ActivityPresentAsync : null);
         }
         finally
         {
             metrics.ConnectionClosed(sessionId);
             await registry.UnregisterAsync(connectionId, CancellationToken.None);
-            await HandleDisconnectAsync(db, registry, reconnectTracker, scopeFactory, configuration, logger,
-                sessionId, participant.Id, connectionId);
+            if (activity)
+            {
+                await FinalizeDisconnectAsync(db, participant.Id, connectionId);
+                await BroadcastAsync(registry, sessionId, participant.Id, "session.left", participant.Id,
+                    new { participantId = participant.Id }, CancellationToken.None);
+            }
+            else
+                await HandleDisconnectAsync(db, registry, reconnectTracker, scopeFactory, configuration, logger,
+                    sessionId, participant.Id, connectionId);
 
             if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
             {
@@ -269,16 +288,32 @@ public static class SignalingWebSocketEndpoint
     private static async Task ReceiveLoopAsync(WebSocket socket,
         Func<ReadOnlyMemory<byte>, CancellationToken, Task> sendAsync, StreamSession session, Guid participantId,
         AppDbContext db, IConnectionRegistry registry, ILogger logger, Observability.SonicRelayMetrics metrics,
-        CancellationToken ct)
+        CancellationToken ct, Func<Task<bool>>? activityPresent = null)
     {
         var sessionId = session.Id;
+        var nextPresenceCheck = DateTimeOffset.UtcNow;
         while (socket.State == WebSocketState.Open && !ct.IsCancellationRequested)
         {
+            if (activityPresent is not null && DateTimeOffset.UtcNow >= nextPresenceCheck)
+            {
+                if (!await activityPresent()) return;
+                nextPresenceCheck = DateTimeOffset.UtcNow.AddSeconds(5);
+            }
             using var receiveCancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
             var receiveTask = ReceiveMessageAsync(socket, receiveCancellation.Token);
             while (!receiveTask.IsCompleted)
             {
                 var completed = await Task.WhenAny(receiveTask, Task.Delay(TimeSpan.FromSeconds(1), ct));
+                if (activityPresent is not null && DateTimeOffset.UtcNow >= nextPresenceCheck)
+                {
+                    if (!await activityPresent())
+                    {
+                        await receiveCancellation.CancelAsync();
+                        try { await receiveTask; } catch (OperationCanceledException) { }
+                        return;
+                    }
+                    nextPresenceCheck = DateTimeOffset.UtcNow.AddSeconds(5);
+                }
                 if (completed != receiveTask && await SessionEndedAsync(db, sessionId, ct))
                 {
                     await SendEnvelopeAsync(sendAsync, "session.ended", sessionId, null, participantId, null, ct);

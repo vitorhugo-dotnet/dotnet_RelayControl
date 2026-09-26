@@ -1,7 +1,7 @@
 # RelayControl
 
 Shared control plane for SonicRelay and FrameRelay. RelayControl provides device identity, pairing, sessions, join codes, authenticated WebSocket signaling and TURN credential issuance using ASP.NET Core Minimal API, PostgreSQL and Redis. WebRTC media stays between clients, directly or through coturn; this API never carries, transcodes or stores the media itself.
- 
+
 ## Project suite
 
 | Project | Repository | Stack | Responsibility |
