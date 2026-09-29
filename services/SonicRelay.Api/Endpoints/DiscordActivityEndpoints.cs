@@ -71,15 +71,23 @@ public static class DiscordActivityEndpoints
             if (identity is null || !await ActivityPresenceService.IsAuthorizedAsync(db, discord, identity, time.GetUtcNow(), ct)) return Results.Unauthorized();
             var token = RelayCapability.NewToken();
             var grant = RelayCapability.Create("grant", token, time.GetUtcNow(), 60);
-            CopyContext(identity, grant); db.LaunchCapabilities.Add(grant); await db.SaveChangesAsync(ct);
+            CopyContext(identity, grant);
+            // The grant can only be redeemed with the bearer that created it.
+            grant.Code = identity.Id.ToString("N");
+            db.LaunchCapabilities.Add(grant); await db.SaveChangesAsync(ct);
             return Results.Ok(new { grant = token, grant.ExpiresAt });
         });
-        group.MapPost("/viewer-grants/redeem", async (GrantRequest request, AppDbContext db, IDiscordActivityValidator discord,
+        group.MapPost("/viewer-grants/redeem", async (GrantRequest request, HttpContext context, AppDbContext db, IDiscordActivityValidator discord,
             IParticipantAdmissionLock admissionLock, TurnCredentialService turn, TimeProvider time, CancellationToken ct) =>
         {
             var now = time.GetUtcNow();
             var grant = await RelayCapability.FindAsync(db, request.Grant, "grant", now, ct);
             if (grant?.SessionId is not { } sessionId) return Results.Unauthorized();
+            var header = context.Request.Headers.Authorization.ToString();
+            var identity = await RelayCapability.FindAsync(db, header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? header[7..] : "", "identity", now, ct);
+            if (identity is null || grant.Code != identity.Id.ToString("N") || grant.SessionId != identity.SessionId
+                || grant.InstanceId != identity.InstanceId || grant.UserId != identity.UserId)
+                return Results.Unauthorized();
             using var admission = await admissionLock.AcquireAsync(sessionId, Guid.Empty, ct);
             now = time.GetUtcNow();
             if (!await ActivityPresenceService.IsAuthorizedAsync(db, discord, grant, now, ct)) return Results.Unauthorized();

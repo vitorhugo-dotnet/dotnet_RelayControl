@@ -166,6 +166,17 @@ public sealed class LaunchIntentService(
         return token.Value;
     }
 
+    public async Task<(string Token, DateTimeOffset ExpiresAt)> CreateWatchCapabilityForReadyIntentAsync(
+        Guid intentId, string guildId, string channelId, int? ttlSeconds, CancellationToken ct)
+    {
+        var intent = await db.ShareLaunchIntents.AsNoTracking().SingleOrDefaultAsync(x => x.Id == intentId, ct);
+        if (intent?.Status != ShareLaunchIntentStatuses.Ready || intent.SessionId is not { } sessionId
+            || intent.GuildId != guildId || intent.ChannelId != channelId)
+            throw new LaunchIntentException("session_unavailable");
+        return await CreateWatchCapabilityForSessionAsync(sessionId, ttlSeconds, ct)
+            ?? throw new LaunchIntentException("session_unavailable");
+    }
+
     public async Task<Guid> ResolveWatchCapabilityAsync(string? token, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(token) || token.Length > 128)
