@@ -39,7 +39,7 @@ public sealed class LaunchIntentActivityTests
         public Task<bool> IsPresentAsync(DiscordActivityIdentity identity, CancellationToken ct) => Task.FromResult(Present);
     }
     private static SonicRelayApiFactory Factory() => new(new Dictionary<string, string?>
-        { ["LaunchIntents:ServiceToken"] = "bot-secret", ["RelayLaunch:PublicBaseUrl"] = "https://relay.example" });
+        { ["LaunchIntents:ServiceToken"] = "bot-secret", ["LaunchIntents:PublicBaseUrl"] = "https://relay.example", ["RelayLaunch:PublicBaseUrl"] = "https://relay.example" });
     private static HttpClient Bot(Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactory<Program> factory)
     {
         var bot = factory.CreateClient(); bot.DefaultRequestHeaders.Authorization = new("Bearer", "bot-secret"); return bot;
@@ -91,6 +91,12 @@ public sealed class LaunchIntentActivityTests
         Assert.Equal(JsonValueKind.String, defaultWatch.GetProperty("watchLaunchUrl").ValueKind);
         var readyItems = await Json(await bot.GetAsync("/api/launch-intents/pending"));
         Assert.Equal("session_ready", readyItems[0].GetProperty("status").GetString());
+        var click = await Json(await bot.PostAsJsonAsync($"/api/launch-intents/{id}/activity", new { guildId = "1", channelId = "2", requestedByUserId = "4", ttlSeconds = 120 }));
+        Assert.NotEqual(Guid.Empty, click.GetProperty("id").GetGuid());
+        Assert.Equal(HttpStatusCode.NotFound, (await bot.PostAsJsonAsync($"/api/launch-intents/{id}/activity", new { guildId = "9", channelId = "2", requestedByUserId = "4" })).StatusCode);
+        var personal = await Json(await bot.PostAsJsonAsync($"/api/launch-intents/{id}/watch", new { guildId = "1", channelId = "2", requestedByUserId = "4", ttlSeconds = 120 }));
+        Assert.StartsWith("https://relay.example/open/watch/", personal.GetProperty("launchUrl").GetString());
+        Assert.Equal(HttpStatusCode.NotFound, (await bot.PostAsJsonAsync($"/api/launch-intents/{id}/watch", new { guildId = "9", channelId = "2", requestedByUserId = "4" })).StatusCode);
     }
 
     [Fact]
@@ -108,6 +114,12 @@ public sealed class LaunchIntentActivityTests
         viewer.DefaultRequestHeaders.Authorization = new("Bearer", identity.GetProperty("accessToken").GetString());
         Assert.Equal(HttpStatusCode.Unauthorized, (await viewer.PostAsJsonAsync("/api/sessions/", new { })).StatusCode);
         var grant = await Json(await viewer.PostAsync("/api/discord/activity/viewer-grants", null));
+        using var unauthenticated = factory.CreateClient();
+        Assert.Equal(HttpStatusCode.Unauthorized, (await unauthenticated.PostAsJsonAsync("/api/discord/activity/viewer-grants/redeem", new { grant = grant.GetProperty("grant").GetString() })).StatusCode);
+        var secondIdentity = await Json(await viewer.PostAsJsonAsync("/api/discord/activity/authorize", new { code = "valid", instanceId = "instance" }));
+        viewer.DefaultRequestHeaders.Authorization = new("Bearer", secondIdentity.GetProperty("accessToken").GetString());
+        Assert.Equal(HttpStatusCode.Unauthorized, (await viewer.PostAsJsonAsync("/api/discord/activity/viewer-grants/redeem", new { grant = grant.GetProperty("grant").GetString() })).StatusCode);
+        viewer.DefaultRequestHeaders.Authorization = new("Bearer", identity.GetProperty("accessToken").GetString());
         var admitted = await Json(await viewer.PostAsJsonAsync("/api/discord/activity/viewer-grants/redeem", new { grant = grant.GetProperty("grant").GetString() }));
         Assert.Equal(screen.GetProperty("id").GetGuid(), admitted.GetProperty("sessionId").GetGuid());
         Assert.False(admitted.TryGetProperty("accessToken", out _)); Assert.True(admitted.TryGetProperty("signalingToken", out _));

@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using SonicRelay.Api.Services;
 using SonicRelay.Application.Abstractions;
+using SonicRelay.Domain.LaunchIntents;
 using SonicRelay.Domain.Sessions;
 using SonicRelay.Infrastructure.Persistence;
 
@@ -14,6 +15,8 @@ namespace SonicRelay.Api.Endpoints;
 public static class DiscordActivityLaunchIntentEndpoints
 {
     public sealed record ActivityRequest(string Code, string GuildId, string ChannelId,
+        string RequestedByUserId, int TtlSeconds = 120);
+    public sealed record ReadyActivityRequest(string GuildId, string ChannelId,
         string RequestedByUserId, int TtlSeconds = 120);
     public sealed record TokenRequest(string Token);
     public sealed record BindRequest(Guid SessionId);
@@ -38,6 +41,42 @@ public static class DiscordActivityLaunchIntentEndpoints
             db.LaunchCapabilities.Add(intent);
             await db.SaveChangesAsync(ct);
             return Results.Ok(new { intent.Id, intent.ExpiresAt });
+        });
+        bot.MapPost("/{intentId:guid}/activity", async (Guid intentId, ReadyActivityRequest request,
+            AppDbContext db, TimeProvider time, CancellationToken ct) =>
+        {
+            if (!ValidContext(request.GuildId, request.ChannelId, request.RequestedByUserId)
+                || request.TtlSeconds is < 30 or > 900) return Results.BadRequest();
+            var source = await db.ShareLaunchIntents.AsNoTracking().SingleOrDefaultAsync(x => x.Id == intentId, ct);
+            if (source?.Status != ShareLaunchIntentStatuses.Ready || source.SessionId is not { } sessionId
+                || source.GuildId != request.GuildId || source.ChannelId != request.ChannelId
+                || !await db.StreamSessions.AnyAsync(x => x.Id == sessionId && x.Mode == SessionModes.ScreenShare
+                    && x.Status != SessionStatuses.Ended && x.Status != SessionStatuses.Expired, ct))
+                return Results.NotFound();
+            var intent = RelayCapability.Create("activity", RelayCapability.NewToken(), time.GetUtcNow(), request.TtlSeconds);
+            intent.SessionId = sessionId;
+            intent.GuildId = request.GuildId;
+            intent.ChannelId = request.ChannelId;
+            intent.UserId = request.RequestedByUserId;
+            db.LaunchCapabilities.Add(intent);
+            await db.SaveChangesAsync(ct);
+            return Results.Ok(new { intent.Id, intent.ExpiresAt });
+        });
+        bot.MapPost("/{intentId:guid}/watch", async (Guid intentId, ReadyActivityRequest request,
+            LaunchIntentService service, IOptions<LaunchIntentOptions> options, CancellationToken ct) =>
+        {
+            if (!ValidContext(request.GuildId, request.ChannelId, request.RequestedByUserId)) return Results.BadRequest();
+            try
+            {
+                var (token, expiresAt) = await service.CreateWatchCapabilityForReadyIntentAsync(
+                    intentId, request.GuildId, request.ChannelId, request.TtlSeconds, ct);
+                return Results.Ok(new { launchUrl = $"{options.Value.PublicBaseUrl.TrimEnd('/')}/open/watch/{token}", expiresAt });
+            }
+            catch (LaunchIntentException error) when (error.Code == "session_full")
+            {
+                return Results.Conflict(new { code = error.Code });
+            }
+            catch (LaunchIntentException) { return Results.NotFound(); }
         });
 
         var device = app.MapGroup("/api/launch-intents").WithTags("Launch intents")
