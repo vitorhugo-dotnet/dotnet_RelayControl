@@ -12,10 +12,14 @@ using Microsoft.OpenApi.Models;
 using Prometheus;
 using SonicRelay.Api.Authorization;
 using SonicRelay.Api.Endpoints;
+using SonicRelay.Api.Features;
+using Microsoft.FeatureManagement;
 using SonicRelay.Api.Services;
 using SonicRelay.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
+RelayFeatures.AddDefaults(builder.Configuration);
+builder.Services.AddFeatureManagement();
 
 // The signaling receive loop polls session state every second per socket, which
 // floods the console with EF `SELECT Status, CodeExpiresAt` command logs. Keep
