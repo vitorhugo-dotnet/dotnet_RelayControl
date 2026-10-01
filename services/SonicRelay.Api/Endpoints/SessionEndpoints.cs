@@ -274,6 +274,8 @@ public static class SessionEndpoints
         AppDbContext db, IParticipantAdmissionLock admissionLock, ILoggerFactory loggerFactory,
         SonicRelayMetrics metrics, IVariantFeatureManager features, CancellationToken ct)
     {
+        if (session.Mode == SessionModes.Duplex && !await features.IsEnabledAsync(RelayFeatures.DuplexAudio))
+            return RelayFeatures.Disabled(RelayFeatures.DuplexAudio);
         if (session.Mode == SessionModes.ScreenShare && !await features.IsEnabledAsync(RelayFeatures.ScreenShare))
             return RelayFeatures.Disabled(RelayFeatures.ScreenShare);
         // Admission is read-then-insert, so two joins racing each other would otherwise both see

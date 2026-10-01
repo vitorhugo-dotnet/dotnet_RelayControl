@@ -58,15 +58,17 @@ public sealed class FeatureFlagEndpointsTests
         Assert.False(await scope.ServiceProvider.GetRequiredService<AppDbContext>().StreamSessions.AnyAsync(x => x.Mode == mode));
     }
 
-    [Fact]
-    public async Task ScreenShare_false_blocks_join_and_preserves_session_end()
+    [Theory]
+    [InlineData("ScreenShare", "screen_share")]
+    [InlineData("DuplexAudio", "duplex")]
+    public async Task Disabled_mode_blocks_join_and_preserves_session_end(string feature, string mode)
     {
         await using var factory = new SonicRelayApiFactory(new Dictionary<string, string?>
-        { ["FeatureManagement:ScreenShare"] = "false" });
+        { [$"FeatureManagement:{feature}"] = "false" });
         using var owner = factory.CreateClient();
         var identity = await DeviceIdentityTestHelper.BootstrapAndAuthorizeAsync(owner, "windows_desktop", "windows");
         var session = new StreamSession
-        { Id = Guid.NewGuid(), SourceDeviceId = identity.DeviceId, Mode = "screen_share", CodeExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10), CreatedAt = DateTimeOffset.UtcNow };
+        { Id = Guid.NewGuid(), SourceDeviceId = identity.DeviceId, Mode = mode, CodeExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10), CreatedAt = DateTimeOffset.UtcNow };
         using (var scope = factory.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
