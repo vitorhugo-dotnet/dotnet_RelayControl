@@ -1,3 +1,5 @@
+using Microsoft.FeatureManagement;
+using SonicRelay.Api.Features;
 using Microsoft.EntityFrameworkCore;
 using SonicRelay.Api.Services;
 using SonicRelay.Application.Abstractions;
@@ -10,10 +12,11 @@ namespace SonicRelay.Api.Endpoints;
 public static class DiscordActivityEndpoints
 {
     public sealed record AuthorizeRequest(string Code, string InstanceId);
-    public sealed record GrantRequest(string Grant);
+    public sealed record GrantRequest(string Grant, string? Transport = null);
     public static IEndpointRouteBuilder MapDiscordActivityEndpoints(this IEndpointRouteBuilder app)
     {
-        var group = app.MapGroup("/api/discord/activity").RequireRateLimiting("join-session");
+        var group = app.MapGroup("/api/discord/activity").RequireRateLimiting("join-session")
+            .AddEndpointFilter(new FeatureEndpointFilter(RelayFeatures.DiscordActivity));
         group.MapPost("/authorize", async (AuthorizeRequest request, IDiscordActivityValidator discord, AppDbContext db, IParticipantAdmissionLock admissionLock, TimeProvider time, CancellationToken ct) =>
         {
             DiscordActivityIdentity? identity;
@@ -78,8 +81,22 @@ public static class DiscordActivityEndpoints
             return Results.Ok(new { grant = token, grant.ExpiresAt });
         });
         group.MapPost("/viewer-grants/redeem", async (GrantRequest request, HttpContext context, AppDbContext db, IDiscordActivityValidator discord,
-            IParticipantAdmissionLock admissionLock, TurnCredentialService turn, TimeProvider time, CancellationToken ct) =>
+            IParticipantAdmissionLock admissionLock, TurnCredentialService turn, TimeProvider time, IVariantFeatureManager features, MediaRelayGrantService media, CancellationToken ct) =>
         {
+            if (request.Transport is not null)
+            {
+                if (request.Transport != "websocket") return Results.BadRequest(new { code = "invalid_transport" });
+                if (!await features.IsEnabledAsync(RelayFeatures.DiscordWebSocketMedia)) return Results.NotFound();
+                var bearer = context.Request.Headers.Authorization.ToString();
+                try
+                {
+                    var result = await media.IssueViewAsync(request.Grant,
+                        bearer.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? bearer[7..] : "", ct);
+                    return result is null ? Results.Unauthorized() : Results.Ok(result);
+                }
+                catch (MediaViewerLimitException) { return Results.Conflict(new { code = "viewer_limit" }); }
+            }
+            if (!await features.IsEnabledAsync(RelayFeatures.ScreenShare)) return RelayFeatures.Disabled(RelayFeatures.ScreenShare);
             var now = time.GetUtcNow();
             var grant = await RelayCapability.FindAsync(db, request.Grant, "grant", now, ct);
             if (grant?.SessionId is not { } sessionId) return Results.Unauthorized();
@@ -109,6 +126,14 @@ public static class DiscordActivityEndpoints
             if (transaction is not null) await transaction.CommitAsync(ct);
             var ice = await turn.BuildAsync(device.Id.ToString(), ct);
             return Results.Ok(new { sessionId, participantId = participant.Id, signalingToken = token, signal.ExpiresAt, ice.IceServers });
+        });
+        group.MapPost("/media-admissions/{admissionId:guid}/release", async (Guid admissionId, HttpContext context,
+            AppDbContext db, MediaRelayGrantService media, TimeProvider time, CancellationToken ct) =>
+        {
+            var bearer = context.Request.Headers.Authorization.ToString();
+            var identity = await RelayCapability.FindAsync(db, bearer.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? bearer[7..] : "", "identity", time.GetUtcNow(), ct);
+            if (identity is null) return Results.Unauthorized();
+            return await media.ReleaseAdmissionAsync(admissionId, identity, ct) ? Results.NoContent() : Results.NotFound();
         });
         return app;
     }

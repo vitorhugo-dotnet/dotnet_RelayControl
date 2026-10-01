@@ -6,6 +6,7 @@ services:
     env_file:
       - .env
     environment:
+      FeatureManagement__DiscordWebSocketMedia: "${FeatureManagement__DiscordWebSocketMedia:-false}"
       PUBLICROOM__ENABLED: "${PUBLICROOM_ENABLED:-false}"
       PUBLICROOM__TRACKSPATH: "/app/tracks"
       PUBLICROOM__MAXVIEWERS: "${PUBLICROOM_MAXVIEWERS:-20}"
@@ -15,6 +16,22 @@ services:
       - ${PUBLICROOM_TRACKS_HOST_PATH:-./tracks}:/app/tracks:ro
     networks:
       - infra_network
+
+  media-relay:
+    profiles: ["media"]
+    image: ${MEDIA_IMAGE:-ghcr.io/vitorhugo-dotnet/sonicrelay-media:latest}
+    container_name: sonicrelay-media
+    restart: unless-stopped
+    mem_limit: 512m
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      MediaRelay__ApiBaseUrl: http://api:8080/
+      MediaRelay__ServiceToken: ${MediaRelay__ServiceToken:-}
+      MediaRelay__MaxUploads: ${MediaRelay__MaxUploads:-64}
+      MediaRelay__MaxViewers: ${MediaRelay__MaxViewers:-256}
+    expose: ["8080"]
+    depends_on: ["api"]
+    networks: ["infra_network"]
 
 networks:
   infra_network:

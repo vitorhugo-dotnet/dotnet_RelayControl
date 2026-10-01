@@ -38,11 +38,12 @@ public sealed class PublicRoomPublisherServiceTests
         });
         _ = factory.CreateClient();
 
-        // Give the hosted service's startup a moment to run its seeding step.
-        await Task.Delay(TimeSpan.FromSeconds(1));
-
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<SonicRelay.Infrastructure.Persistence.AppDbContext>();
+        // Wait for the actual startup milestone rather than assuming a loaded runner finishes in one second.
+        using var startupBudget = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (!await db.StreamSessions.AnyAsync(x => x.Id == PublicRoomSeeder.PublicSessionId, startupBudget.Token))
+            await Task.Delay(20, startupBudget.Token);
         Assert.True(await db.StreamSessions.AnyAsync(x => x.Id == PublicRoomSeeder.PublicSessionId));
         await factory.DisposeAsync();
         Directory.Delete(emptyTracksDir, recursive: true);

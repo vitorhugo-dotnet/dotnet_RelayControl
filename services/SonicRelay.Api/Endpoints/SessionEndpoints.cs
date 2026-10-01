@@ -1,3 +1,5 @@
+using Microsoft.FeatureManagement;
+using SonicRelay.Api.Features;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -37,7 +39,7 @@ public static class SessionEndpoints
 
     private static async Task<IResult> CreateAsync(CreateSessionRequest request,
         ClaimsPrincipal principal, AppDbContext db, ISessionCodeStore codeStore, IConfiguration configuration,
-        ILoggerFactory loggerFactory, SonicRelayMetrics metrics, CancellationToken ct)
+        ILoggerFactory loggerFactory, SonicRelayMetrics metrics, IVariantFeatureManager features, CancellationToken ct)
     {
         var device = await DeviceIdentityEndpoints.RequireDeviceAsync(principal, db, ct);
         if (device is null) return Results.Unauthorized();
@@ -50,6 +52,11 @@ public static class SessionEndpoints
                 error = $"Mode must be '{SessionModes.Broadcast}', '{SessionModes.Duplex}' or '{SessionModes.ScreenShare}'.",
                 code = "invalid_session_mode"
             });
+
+        if (mode == SessionModes.Duplex && !await features.IsEnabledAsync(RelayFeatures.DuplexAudio))
+            return RelayFeatures.Disabled(RelayFeatures.DuplexAudio);
+        if (mode == SessionModes.ScreenShare && !await features.IsEnabledAsync(RelayFeatures.ScreenShare))
+            return RelayFeatures.Disabled(RelayFeatures.ScreenShare);
 
         var now = DateTimeOffset.UtcNow;
         var ttl = CodeTtl(configuration);
@@ -211,7 +218,7 @@ public static class SessionEndpoints
 
     private static async Task<IResult> JoinAsync(JoinSessionRequest request, ClaimsPrincipal principal, AppDbContext db,
         ISessionCodeStore codeStore, IConfiguration configuration, IParticipantAdmissionLock admissionLock,
-        ILoggerFactory loggerFactory, SonicRelayMetrics metrics, CancellationToken ct)
+        ILoggerFactory loggerFactory, SonicRelayMetrics metrics, IVariantFeatureManager features, CancellationToken ct)
     {
         var device = await DeviceIdentityEndpoints.RequireDeviceAsync(principal, db, ct);
         if (device is null) return Results.Unauthorized();
@@ -239,7 +246,7 @@ public static class SessionEndpoints
             return InvalidCode();
         }
 
-        return await AdmitViewerAsync(session, device, db, admissionLock, loggerFactory, metrics, ct);
+        return await AdmitViewerAsync(session, device, db, admissionLock, loggerFactory, metrics, features, ct);
     }
 
     // Code-free join for a session the caller found through /discoverable. It runs exactly the
@@ -248,7 +255,7 @@ public static class SessionEndpoints
     // this endpoint cannot be used to probe which session ids exist.
     private static async Task<IResult> JoinByIdAsync(Guid sessionId, ClaimsPrincipal principal, AppDbContext db,
         IParticipantAdmissionLock admissionLock, ILoggerFactory loggerFactory, SonicRelayMetrics metrics,
-        CancellationToken ct)
+        IVariantFeatureManager features, CancellationToken ct)
     {
         var device = await DeviceIdentityEndpoints.RequireDeviceAsync(principal, db, ct);
         if (device is null) return Results.Unauthorized();
@@ -257,7 +264,7 @@ public static class SessionEndpoints
         if (session is null || session.Status is SessionStatuses.Ended or SessionStatuses.Expired)
             return InvalidCode();
 
-        return await AdmitViewerAsync(session, device, db, admissionLock, loggerFactory, metrics, ct);
+        return await AdmitViewerAsync(session, device, db, admissionLock, loggerFactory, metrics, features, ct);
     }
 
     // Shared by both join paths (code and session id): everything that happens once a live
@@ -265,8 +272,10 @@ public static class SessionEndpoints
     // from drifting on pairing, viewer-limit or reconnect semantics.
     private static async Task<IResult> AdmitViewerAsync(StreamSession session, DeviceIdentity device,
         AppDbContext db, IParticipantAdmissionLock admissionLock, ILoggerFactory loggerFactory,
-        SonicRelayMetrics metrics, CancellationToken ct)
+        SonicRelayMetrics metrics, IVariantFeatureManager features, CancellationToken ct)
     {
+        if (session.Mode == SessionModes.ScreenShare && !await features.IsEnabledAsync(RelayFeatures.ScreenShare))
+            return RelayFeatures.Disabled(RelayFeatures.ScreenShare);
         // Admission is read-then-insert, so two joins racing each other would otherwise both see
         // "no participant yet" and both insert one. That is not a hypothetical: a device coming
         // back from a network loss legitimately fires several joins at once (the automatic

@@ -137,6 +137,7 @@ builder.Services.AddHttpClient("DiscordActivityInstances", client => client.Time
 builder.Services.AddSingleton<DiscordActivityInstanceCache>();
 builder.Services.AddSingleton<DeviceCredentialService>();
 builder.Services.AddScoped<LaunchIntentService>();
+builder.Services.AddScoped<MediaRelayGrantService>();
 builder.Services.AddSingleton<SignalingGrantService>();
 builder.Services.AddSingleton<PairingChallengeService>();
 builder.Services.AddScoped<IAuthorizationHandler, DeviceScopeAuthorizationHandler>();
@@ -168,6 +169,7 @@ builder.Services.AddAuthentication(options => options.DefaultForbidScheme = "Dev
         SignalingGrantAuthenticationHandler.SchemeName, _ => { })
     .AddScheme<AuthenticationSchemeOptions, LaunchServiceAuthenticationHandler>(
         LaunchServiceAuthenticationHandler.SchemeName, _ => { })
+    .AddScheme<AuthenticationSchemeOptions, MediaRelayServiceAuthenticationHandler>(MediaRelayServiceAuthenticationHandler.SchemeName, _ => { })
     .AddScheme<AuthenticationSchemeOptions, ActivityAuthenticationHandler>("Activity", _ => { });
 
 builder.Services.AddSingleton<SessionCleanupService>();
@@ -239,6 +241,7 @@ builder.Services.AddAuthorization(options =>
         policy.Requirements.Add(new DeviceScopeRequirement("signaling:connect"));
     });
 
+    options.AddPolicy("media-relay:service", policy => policy.AddAuthenticationSchemes(MediaRelayServiceAuthenticationHandler.SchemeName).RequireAuthenticatedUser());
     options.AddPolicy("launch-intents:bot", policy =>
     {
         policy.AddAuthenticationSchemes(LaunchServiceAuthenticationHandler.SchemeName);
@@ -307,6 +310,7 @@ app.MapSessionEndpoints();
 app.MapLaunchIntentEndpoints();
 app.MapDiscordActivityLaunchIntentEndpoints();
 app.MapDiscordActivityEndpoints();
+app.MapMediaRelayEndpoints();
 app.MapWebRtcEndpoints();
 app.MapSettingsEndpoints();
 app.MapSignalingGrantEndpoints();

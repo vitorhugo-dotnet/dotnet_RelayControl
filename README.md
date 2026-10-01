@@ -131,3 +131,23 @@ The automated deployment Compose file contains only RelayControl's API process. 
 ## License
 
 See [LICENSE](LICENSE).
+
+### Feature switches
+
+RelayControl uses Microsoft.FeatureManagement. `FeatureManagement__PublicRooms`, `FeatureManagement__DiscordActivity`, `FeatureManagement__DuplexAudio` and `FeatureManagement__ScreenShare` default to `true`; explicit `false` disables new work. Public-room and Activity routes return 404, disabled session modes return 409 with `feature_disabled`. Session end, credentials, cleanup, TURN and generic signaling remain available. Public rooms also require `PublicRoom__Enabled=true`. Docker environment changes require `docker compose up -d --force-recreate api`; restarting a container does not reload its environment. `FeatureManagement__DiscordWebSocketMedia` defaults to `false`.
+
+### Discord WebSocket media rollout
+
+See [media protocol](docs/protocol/discord-media-v1.md). Existing RTC publishers/viewers, TURN and generic signaling keep their transport. Media uses a separate `media-relay` process that forwards already encoded H.264/Opus with bounded queues, without transcoding. This service is single-instance; do not load-balance one session across instances.
+
+Set a random `MediaRelay__ServiceToken` in the API deployment `.env`; Compose passes it only to the API and media relay. Set `MediaRelay__PublicBaseUrl=wss://media.example.com/ws/media` to the public upload endpoint. Proxy that host to `sonicrelay-media:8080`, preserving `/ws/media`, with WebSocket Upgrade headers and timeouts longer than 30 seconds. Do not expose `/api/internal/media-relay/*` through a separate public proxy rule; it requires a distinct service credential.
+
+New transport is disabled by default. To roll out, set `COMPOSE_PROFILES=media`, `FeatureManagement__DiscordWebSocketMedia=true`, and keep `FeatureManagement__DiscordActivity=true` and `FeatureManagement__ScreenShare=true`. Use the API and media images from the same commit (`IMAGE` and `MEDIA_IMAGE`); CI publishes separate SHA tags and leaves existing API image selection intact. Recreate both containers with `docker compose -f docker-compose.prod.yml --profile media up -d --force-recreate api media-relay`.
+
+On the publisher process, set `FRAMERELAY_WEBSOCKET_MEDIA_ENABLED=true` and restart FrameRelay. This is a process environment variable, not a desktop `.env` loader. When false or missing, there are no upload requests or extra encoders. H.264 output is reused; RTC AV1 uses an independent H.264 encoder for Activity without changing RTC codec selection.
+
+Configure Discord Activity URL Mapping `/relay` to the existing API, and `/media` to the public media host. The Activity connects to `/media/ws/media` on its mapped origin; it does not use a direct desktop upload URL. It requires supported VideoDecoder/AudioDecoder and checks the actual H.264 profile and Opus configuration; unavailable codecs produce a desktop-viewer message. The play button resumes audio after a user gesture.
+
+Disabling the media flag stops new grants and denies lease renewal. Leases expire after 30 seconds and renew every 10 seconds; disconnect/release and grant cleanup free Activity capacity without disconnecting RTC publishers. Live Discord verification must check pixels, audible synchronized audio, late join/keyframe recovery, reconnect, session end and a simultaneous desktop RTC viewer before enabling production rollout.
+
+Local browser fixture: run `dotnet run --project tests/SonicRelay.MediaRelay.BrowserFixture` and the Activity Vite server on port 5173. Open `http://127.0.0.1:5173/tests/browser-media-fixture.html` and click Run. It encodes generated colors and a tone, forwards via real WebSockets, checks actual decoded canvas pixels and PCM energy, and closes resources. The fixture uses a fake grant API on localhost only; production never installs that project.
