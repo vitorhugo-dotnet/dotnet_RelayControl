@@ -11,6 +11,12 @@ services:
       - "8080"
     restart: always
 
+  media-relay:
+    profiles: ["prod", "media"]
+    image: ${MEDIA_IMAGE:-ghcr.io/vitorhugo-dotnet/sonicrelay-media:latest}
+    build: null
+    expose: ["8080"]
+
   postgres:
     profiles: ["prod"]
     ports: []

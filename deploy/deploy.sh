@@ -71,9 +71,10 @@ run_migrations() {
 }
 
 export IMAGE
+export MEDIA_IMAGE="${MEDIA_IMAGE:-}"
 
 echo "Pulling image: $IMAGE"
-docker compose -f "$COMPOSE_FILE" pull api
+docker compose -f "$COMPOSE_FILE" pull
 
 run_migrations
 

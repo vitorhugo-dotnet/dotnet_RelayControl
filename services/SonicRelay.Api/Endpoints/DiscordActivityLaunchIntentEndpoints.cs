@@ -1,3 +1,4 @@
+using SonicRelay.Api.Features;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -41,7 +42,7 @@ public static class DiscordActivityLaunchIntentEndpoints
             db.LaunchCapabilities.Add(intent);
             await db.SaveChangesAsync(ct);
             return Results.Ok(new { intent.Id, intent.ExpiresAt });
-        });
+        }).AddEndpointFilter(new FeatureEndpointFilter(RelayFeatures.DiscordActivity));
         bot.MapPost("/{intentId:guid}/activity", async (Guid intentId, ReadyActivityRequest request,
             AppDbContext db, TimeProvider time, CancellationToken ct) =>
         {
@@ -61,7 +62,7 @@ public static class DiscordActivityLaunchIntentEndpoints
             db.LaunchCapabilities.Add(intent);
             await db.SaveChangesAsync(ct);
             return Results.Ok(new { intent.Id, intent.ExpiresAt });
-        });
+        }).AddEndpointFilter(new FeatureEndpointFilter(RelayFeatures.DiscordActivity));
         bot.MapPost("/{intentId:guid}/watch", async (Guid intentId, ReadyActivityRequest request,
             LaunchIntentService service, IOptions<LaunchIntentOptions> options, CancellationToken ct) =>
         {

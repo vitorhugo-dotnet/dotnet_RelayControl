@@ -1,3 +1,5 @@
+using Microsoft.FeatureManagement;
+using SonicRelay.Api.Features;
 using System.Collections.Concurrent;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
@@ -34,6 +36,7 @@ public sealed class PublicRoomPublisherService(
     DeviceCredentialService credentials,
     IServer server,
     TimeProvider time,
+    IVariantFeatureManager features,
     ILogger<PublicRoomPublisherService> logger) : BackgroundService
 {
     private static readonly TimeSpan ReconnectDelay = TimeSpan.FromSeconds(5);
@@ -49,7 +52,7 @@ public sealed class PublicRoomPublisherService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (!options.Value.Enabled)
+        if (!options.Value.Enabled || !await features.IsEnabledAsync(RelayFeatures.PublicRooms))
         {
             logger.LogInformation("Public radio room is disabled; PublicRoomPublisherService is a no-op");
             return;
@@ -59,6 +62,7 @@ public sealed class PublicRoomPublisherService(
         {
             try
             {
+                if (!await features.IsEnabledAsync(RelayFeatures.PublicRooms)) return;
                 await RunOnceAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)

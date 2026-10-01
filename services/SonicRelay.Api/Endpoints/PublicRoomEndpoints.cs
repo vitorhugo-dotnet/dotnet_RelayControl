@@ -1,3 +1,4 @@
+using SonicRelay.Api.Features;
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -14,7 +15,8 @@ public static class PublicRoomEndpoints
     {
         app.MapGet("/api/public-room", GetAsync)
             .RequireAuthorization("DeviceAuthenticated")
-            .WithTags("PublicRoom");
+            .WithTags("PublicRoom")
+            .AddEndpointFilter(new FeatureEndpointFilter(RelayFeatures.PublicRooms));
         return app;
     }
 

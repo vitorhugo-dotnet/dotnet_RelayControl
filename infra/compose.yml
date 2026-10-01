@@ -11,6 +11,13 @@ services:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
       ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=${POSTGRES_DB:-sonicrelay};Username=${POSTGRES_USER:-sonicrelay};Password=${POSTGRES_PASSWORD:-change-me}
       Redis__ConnectionString: redis:6379,password=${REDIS_PASSWORD:-change-me},abortConnect=false
+      FeatureManagement__PublicRooms: ${FeatureManagement__PublicRooms:-true}
+      FeatureManagement__DiscordActivity: ${FeatureManagement__DiscordActivity:-true}
+      FeatureManagement__DuplexAudio: ${FeatureManagement__DuplexAudio:-true}
+      FeatureManagement__ScreenShare: ${FeatureManagement__ScreenShare:-true}
+      MediaRelay__ServiceToken: ${MediaRelay__ServiceToken:-}
+      MediaRelay__PublicBaseUrl: ${MediaRelay__PublicBaseUrl:-}
+      FeatureManagement__DiscordWebSocketMedia: ${FeatureManagement__DiscordWebSocketMedia:-false}
       Sessions__CodeTtlMinutes: ${SESSION_CODE_TTL_MINUTES:-10}
       Sessions__CodeHmacKey: ${SESSION_CODE_HMAC_KEY:-change-this-session-code-hmac-key}
       Sessions__MaxViewersPerSession: ${SESSION_MAX_VIEWERS:-3}
@@ -32,6 +39,21 @@ services:
         condition: service_healthy
     networks:
       - sonicrelay
+    restart: unless-stopped
+
+  media-relay:
+    profiles: ["media"]
+    build:
+      context: ../
+      dockerfile: MediaRelay.Dockerfile
+    mem_limit: 512m
+    environment:
+      MediaRelay__ApiBaseUrl: http://api:8080/
+      MediaRelay__ServiceToken: ${MediaRelay__ServiceToken:-}
+      MediaRelay__MaxUploads: ${MediaRelay__MaxUploads:-64}
+      MediaRelay__MaxViewers: ${MediaRelay__MaxViewers:-256}
+    depends_on: ["api"]
+    networks: ["sonicrelay"]
     restart: unless-stopped
 
   postgres:

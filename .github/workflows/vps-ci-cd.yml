@@ -182,10 +182,50 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  publish_media_image:
+    name: Publish isolated media image
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    if: github.event_name != 'pull_request' && needs.build.outputs.has_dotnet_project == 'true'
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve media tags
+        id: image
+        shell: bash
+        run: |
+          image="ghcr.io/${{ github.repository_owner }}/sonicrelay-media:sha-${GITHUB_SHA}"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          {
+            echo 'tags<<EOF'
+            echo "$image"
+            if [[ "$GITHUB_REF" == 'refs/heads/main' ]]; then
+              echo 'ghcr.io/${{ github.repository_owner }}/sonicrelay-media:latest'
+            fi
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./MediaRelay.Dockerfile
+          push: true
+          tags: ${{ steps.image.outputs.tags }}
+          cache-from: type=gha,scope=media
+          cache-to: type=gha,scope=media,mode=max
   deploy:
     name: Deploy to VPS over SSH
     runs-on: ubuntu-latest
-    needs: publish_image
+    needs: [publish_image, publish_media_image]
     if: >-
       ${{
         needs.publish_image.result == 'success' &&
@@ -306,13 +346,14 @@ jobs:
         uses: appleboy/ssh-action@v1
         env:
           IMAGE: ${{ needs.publish_image.outputs.image }}
+          MEDIA_IMAGE: ${{ needs.publish_media_image.outputs.image }}
           APP_DIR: ${{ steps.ssh_target.outputs.app_dir }}
         with:
           host: ${{ steps.ssh_target.outputs.host }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ steps.ssh_target.outputs.port }}
-          envs: IMAGE,APP_DIR
+          envs: IMAGE,MEDIA_IMAGE,APP_DIR
           script: |
             cd "$APP_DIR"
             chmod +x deploy.sh efbundle
