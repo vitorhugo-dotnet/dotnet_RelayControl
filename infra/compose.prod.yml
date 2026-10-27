@@ -1,7 +1,7 @@
 services:
   api:
     profiles: ["prod"]
-    image: ${API_IMAGE:-ghcr.io/vitorhugo-java/sonicrelay-api:latest}
+    image: ${API_IMAGE:-ghcr.io/hugoalves-dev/sonicrelay-api:latest}
     build: null
     environment:
       ASPNETCORE_ENVIRONMENT: Production
@@ -13,7 +13,7 @@ services:
 
   media-relay:
     profiles: ["prod", "media"]
-    image: ${MEDIA_IMAGE:-ghcr.io/vitorhugo-dotnet/sonicrelay-media:latest}
+    image: ${MEDIA_IMAGE:-ghcr.io/hugoalves-dev/sonicrelay-media:latest}
     build: null
     expose: ["8080"]
 

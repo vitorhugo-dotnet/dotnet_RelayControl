@@ -14,7 +14,7 @@ The automated deployment is intentionally API-only. It copies `deploy/docker-com
 
 - Build restores and compiles the configured API project at `services/SonicRelay.Api/SonicRelay.Api.csproj`, failing if that exact path is missing.
 - Test discovers every `*Test.csproj`/`*Tests.csproj`, restores it and uploads TRX results.
-- Non-PR runs build the canonical root `Dockerfile` and publish `ghcr.io/vitorhugo-java/sonicrelay-api:sha-<commit>`.
+- Non-PR runs build the canonical root `Dockerfile` and publish `ghcr.io/hugoalves-dev/sonicrelay-api:sha-<commit>`.
 - `main` additionally publishes `:latest`.
 - Pushes to `main`, and manual runs with `deploy=true`, deploy the immutable SHA image to the production environment.
 
@@ -110,7 +110,7 @@ GitHub Actions copies the two deployment files into the app directory and runs:
 ```bash
 cd /opt/sonicrelay
 chmod +x deploy.sh
-IMAGE=ghcr.io/vitorhugo-java/sonicrelay-api:sha-<commit> ./deploy.sh
+IMAGE=ghcr.io/hugoalves-dev/sonicrelay-api:sha-<commit> ./deploy.sh
 ```
 
 The script validates `.env`, Docker and Compose; pulls the API image; runs `docker compose up -d --remove-orphans`; prunes dangling images; and prints service status.
@@ -148,7 +148,7 @@ Redeploy a previous immutable image tag:
 
 ```bash
 cd /opt/sonicrelay
-IMAGE=ghcr.io/vitorhugo-java/sonicrelay-api:sha-<previous-commit> ./deploy.sh
+IMAGE=ghcr.io/hugoalves-dev/sonicrelay-api:sha-<previous-commit> ./deploy.sh
 ```
 
 Database rollback is separate. Do not downgrade an image across an incompatible schema change without a tested migration rollback or restored backup.

@@ -6,11 +6,11 @@ Shared control plane for SonicRelay and FrameRelay. RelayControl provides device
 
 | Project | Repository | Stack | Responsibility |
 | --- | --- | --- | --- |
-| RelayControl | [dotnet_SonicRelay](https://github.com/vitorhugo-dotnet/dotnet_SonicRelay) | .NET 10, ASP.NET Core, PostgreSQL, Redis | Shared device identity, pairing, sessions, join codes, authorization and signaling control plane. |
-| SonicRelay Mobile Viewer | [flutter_mobile-web_SonicRelay](https://github.com/vitorhugo-dotnet/flutter_mobile-web_SonicRelay) | Flutter, `flutter_webrtc` | Join SonicRelay audio sessions and play WebRTC audio. |
-| SonicRelay Desktop Publisher | [desktop_dotnet_SonicRelay](https://github.com/vitorhugo-dotnet/desktop_dotnet_SonicRelay) | C#/.NET, Avalonia, system-audio capture, WebRTC | Capture system audio and publish it to SonicRelay viewers. |
-| FrameRelay | [dotnet_SonicDesktopRelay](https://github.com/vitorhugo-dotnet/dotnet_SonicDesktopRelay) | C#/.NET, Avalonia, Windows Graphics Capture, FFmpeg, WebRTC | Share a Windows screen and system audio with other Windows machines. |
-| SonicRelay Landing Page | [react_landpage_SonicRelay](https://github.com/vitorhugo-dotnet/react_landpage_SonicRelay) | React, TypeScript, Vite, Tailwind CSS | Public marketing site for SonicRelay. |
+| RelayControl | [dotnet_SonicRelay](https://github.com/hugoalves-dev/dotnet_RelayControl) | .NET 10, ASP.NET Core, PostgreSQL, Redis | Shared device identity, pairing, sessions, join codes, authorization and signaling control plane. |
+| SonicRelay Mobile Viewer | [flutter_mobile-web_SonicRelay](https://github.com/hugoalves-dev/flutter_mobile-web_SonicRelay) | Flutter, `flutter_webrtc` | Join SonicRelay audio sessions and play WebRTC audio. |
+| SonicRelay Desktop Publisher | [desktop_dotnet_SonicRelay](https://github.com/hugoalves-dev/desktop_dotnet_SonicRelay) | C#/.NET, Avalonia, system-audio capture, WebRTC | Capture system audio and publish it to SonicRelay viewers. |
+| FrameRelay | [dotnet_SonicDesktopRelay](https://github.com/hugoalves-dev/dotnet_FrameRelay) | C#/.NET, Avalonia, Windows Graphics Capture, FFmpeg, WebRTC | Share a Windows screen and system audio with other Windows machines. |
+| SonicRelay Landing Page | [react_landpage_SonicRelay](https://github.com/hugoalves-dev/react_landpage_SonicRelay) | React, TypeScript, Vite, Tailwind CSS | Public marketing site for SonicRelay. |
 
 This repository contains only the shared backend/control plane and its infrastructure.
 

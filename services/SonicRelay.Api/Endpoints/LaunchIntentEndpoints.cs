@@ -161,7 +161,7 @@ public static class LaunchIntentEndpoints
         var html = "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"referrer\" content=\"no-referrer\">" +
             "<title>Open FrameRelay</title><body><h1>Opening FrameRelay…</h1>" +
             $"<p><a rel=\"noreferrer\" href=\"{safeUri}\">Open FrameRelay</a></p>" +
-            "<p id=\"fallback\" hidden>FrameRelay did not open. <a rel=\"noreferrer\" href=\"https://github.com/vitorhugo-dotnet/dotnet_FrameRelay/releases/latest\">Install FrameRelay</a>, then select Open FrameRelay above.</p>" +
+            "<p id=\"fallback\" hidden>FrameRelay did not open. <a rel=\"noreferrer\" href=\"https://github.com/hugoalves-dev/dotnet_FrameRelay/releases/latest\">Install FrameRelay</a>, then select Open FrameRelay above.</p>" +
             $"<script>location.href='{safeUri}';setTimeout(()=>document.getElementById('fallback').hidden=false,1500)</script></body></html>";
         return Results.Content(html, "text/html; charset=utf-8");
     }

@@ -1,6 +1,6 @@
 services:
   api:
-    image: ${IMAGE:-ghcr.io/vitorhugo-java/sonicrelay-api:latest}
+    image: ${IMAGE:-ghcr.io/hugoalves-dev/sonicrelay-api:latest}
     container_name: sonicrelay-api
     restart: unless-stopped
     env_file:
@@ -19,7 +19,7 @@ services:
 
   media-relay:
     profiles: ["media"]
-    image: ${MEDIA_IMAGE:-ghcr.io/vitorhugo-dotnet/sonicrelay-media:latest}
+    image: ${MEDIA_IMAGE:-ghcr.io/hugoalves-dev/sonicrelay-media:latest}
     container_name: sonicrelay-media
     restart: unless-stopped
     mem_limit: 512m
